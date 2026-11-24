@@ -18,6 +18,13 @@ if [ -f "$AQUI/cursor-apagado" ] && { [ "${CANAL_PRUEBAS:-0}" != 1 ] || [ "${CUR
   echo "$(date -Is) no pude pasar el encargo a Claude (hilo $HILO)"; rm -f "$J"; exit 12
 fi
 rm -f "$J"
+# Sin saldo de API: si en este hilo Cursor ya falló con usage_limit_exceeded (y no ha arrancado después), ya se avisó UNA vez:
+# no se llama a la API ni se publica otro aviso; se espera a que Humano lo lance a mano o vuelva el saldo (un SI lo desbloquea).
+if AVISADO=$(node "$AQUI/cursor-sin-saldo.js" hilo "$HILO" 2>/dev/null); then
+  echo "$(date -Is) no relanzo Cursor en el hilo $HILO: sin saldo de API (avisado a las $AVISADO); se espera"
+  echo "$(date -Is) ESPERA hilo $HILO sin saldo de API: ya avisado a las $AVISADO, no se relanza ($QUIEN)" >> "$HOME/.canal-logs/cursor-arranques.log"
+  exit 10
+fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 responder() { printf '%s' "$1" > "$TMP/r.txt"; bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$TMP/r.txt" || true; }
 echo "$(date -Is) mención a Cursor de $QUIEN en $CH ($TS), hilo $HILO"

@@ -22,6 +22,14 @@ if [ -f "$AQUI_C/cursor-apagado" ] && { [ "${CANAL_PRUEBAS:-0}" != 1 ] || [ "${C
   CANAL_DESVIO_CURSOR=1 exec bash "$AQUI_C/lanzar-claude.sh" "$CANAL" "$NOTA" "$SHA" "$DESDE"
 fi
 
+# Sin saldo de API: si en este canal Cursor ya falló con usage_limit_exceeded (y no ha arrancado después), no se le vuelve a
+# llamar: se espera a que Humano lo lance a mano o vuelva el saldo (un SI en cursor-arranques.log lo desbloquea).
+if AVISADO=$(node "$AQUI_C/cursor-sin-saldo.js" canal "$CANAL" 2>/dev/null); then
+  mkdir -p "$HOME/.canal-logs"; echo "$(date -Is) ESPERA canal $CANAL ${SHA:0:10} sin saldo de API: ya avisado a las $AVISADO, no se relanza" >> "$HOME/.canal-logs/cursor-arranques.log"
+  echo "CURSOR NO lanzado: sin saldo de API (avisado a las $AVISADO); se espera, no se relanza" >&2
+  exit 10
+fi
+
 bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/freno.sh" cursor || {
   echo "$(date -Is) FRENO: no lanzo a Cursor para $CANAL ${SHA:0:10}" >> "$HOME/.canal-logs/freno.log"; exit 12; }
 
@@ -98,7 +106,10 @@ rm -f "$CURLCFG" "$CERR"
 rm -f "$BODYF"
 mkdir -p "$HOME/.canal-logs"
 if [ "${CODE:0:1}" = "2" ]; then echo "$(date -Is) SI canal $CANAL ${SHA:0:10}" >> "$HOME/.canal-logs/cursor-arranques.log"
-else echo "$(date -Is) NO canal $CANAL ${SHA:0:10} http ${CODE:-?} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-160)" >> "$HOME/.canal-logs/cursor-arranques.log"; fi
+else
+  # http 400 con error.code usage_limit_exceeded = sin saldo de API: se apunta así para no volver a lanzarlo (cursor-sin-saldo.js)
+  SIN_SALDO=""; [ "${CODE:-}" = 400 ] && SIN_SALDO=$(JSON="$JSON" node -e 'const s=process.env.JSON;let c="";try{const j=JSON.parse(s);c=(j.error&&j.error.code)||j.code||""}catch(x){const m=s.match(/"code"\s*:\s*"([^"]+)"/);c=m?m[1]:""}process.stdout.write(c==="usage_limit_exceeded"?"1":"")')
+  echo "$(date -Is) NO canal $CANAL ${SHA:0:10} http ${CODE:-?}${SIN_SALDO:+ sin saldo de API (usage_limit_exceeded)} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-160)" >> "$HOME/.canal-logs/cursor-arranques.log"; fi
 if [ "${CODE:0:1}" = "2" ]; then
   INFO=$(JSON="$JSON" node -e 'try{const j=JSON.parse(process.env.JSON);console.log((j.agent&&j.agent.id||"?")+" "+(j.agent&&j.agent.url||""))}catch(x){console.log("? (respuesta no JSON)")}')
   echo "CURSOR lanzado ($CANAL ${SHA:0:10}): $INFO"

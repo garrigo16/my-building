@@ -3107,6 +3107,12 @@ const MENC = { coo: CONF.slack.ias.coo, claude: CONF.slack.ias.claude, cursor: C
 const anotados = [];
 function anota(l) { if (PRUEBAS) { anotados.push(l); return; } if (DIARIO) DIARIO.linea(limpiaErr(l)); try { fs.mkdirSync(LOGS, { recursive: true }); fs.appendFileSync(path.join(LOGS, "oficina-envios.log"), `${new Date().toISOString()} ${l}\n`); } catch (e) {} }
 let relanzados = [];
+// Cursor sin saldo de API (usage_limit_exceeded) en este hilo y sin un SI después: ya se avisó una vez; no se le relanza (ver
+// herramientas/cursor-sin-saldo.js). En las pruebas no se mira el cursor-arranques.log de verdad (setSinSaldo pone uno falso).
+let cursorSinSaldo = (hilo) => { if (PRUEBAS) return null;
+  try { return require(path.join(__dirname, "..", "herramientas", "cursor-sin-saldo.js")).bloqueoLog({ hilo }, LOGS); } catch (e) { return null; } };
+const sinSaldoAnotado = new Set();
+const AVISO_SIN_SALDO = "Cursor sigue sin saldo de API (ya avisado en el hilo): no lo relanzo; lánzalo a mano en su app.";
 function relanzaPendientes(lista, lanzar = lanzaScript, logf = path.join(LOGS, "traspasos.log"), anotar = anota, barato) {
   relanzados = relanzados.filter((t) => Date.now() - t < 30 * MIN);
   // v491: el vigilante barato (mirada con un modelo pequeño), solo con VIGILANTE_BARATO=1 y solo para Claude (atender-slack.sh)
@@ -3114,6 +3120,12 @@ function relanzaPendientes(lista, lanzar = lanzaScript, logf = path.join(LOGS, "
   const H = path.join(HOME, ".claude", "relevo", "herramientas"), hechos = [];
   const orden = [...(lista || []).filter((r) => !r.proceso), ...(lista || []).filter((r) => r.proceso)];
   for (const r of orden) {
+    const sinSaldo = r.ia === "Cursor" && cursorSinSaldo(r.hilo);
+    if (sinSaldo) {   // ni API ni otro aviso en Slack: se espera (una sola nota por fallo, no en cada vuelta)
+      const k = `${r.hilo}|${sinSaldo.t}`;
+      if (!sinSaldoAnotado.has(k)) { sinSaldoAnotado.add(k); anotar(`hilo ${r.hilo} no relanzo a Cursor: sin saldo de API (ya avisado a las ${hhmm(sinSaldo.t)}); se espera`); }
+      continue;
+    }
     if (r.proceso && relanzados.length >= 2) continue;
     if (relanzados.length >= 3) { anotar(`relanzo: tope de 3 cada 30 min; no relanzo a ${r.ia} en el hilo ${r.hilo}`); break; }
     let ok = false, mira = false;
@@ -3405,12 +3417,15 @@ function esCortesia(t) {
   const pal = limpio.normalize("NFC").split(/[^a-záéíóúüñ+]+/i).filter(Boolean);
   return pal.some((w) => /^(gracias|thanks|thank|merci)$/.test(w)) && pal.every((w) => CORTESIA.has(w));
 }
-function lanzarCursorComoHumano(texto, ts, hilo) {
+function lanzarCursorComoHumano(texto, ts, hilo, lanzar = lanzaScript) {
+  const sinSaldo = cursorSinSaldo(hilo);
+  if (sinSaldo) { anota(`hilo ${hilo} no lanzo Cursor (mensaje ${ts}): sin saldo de API (ya avisado a las ${hhmm(sinSaldo.t)}); se espera a que lo lances a mano o vuelva el saldo`); return "sin saldo"; }
   const f = path.join(os.tmpdir(), `slack-cursor-${Date.now()}-oficina.json`);
   try { fs.writeFileSync(f, JSON.stringify({ text: texto, channel: CH, ts, thread_ts: hilo, quien: "Humano" })); } catch (e) { anota(`hilo ${hilo} no se pudo preparar el lanzamiento de Cursor`); return; }
   const sc = path.join(HOME, ".claude", "relevo", "herramientas", "atender-cursor-slack.sh");
   anota(`hilo ${hilo} lanzo Cursor por API como Humano (mensaje ${ts})`);
-  if (lanzaScript([sc, f], `hilo ${hilo} Cursor lanzado como Humano`, { hilo, ia: "Cursor" })) marcaArranque(hilo, "Cursor");   // v506/v508
+  if (lanzar([sc, f], `hilo ${hilo} Cursor lanzado como Humano`, { hilo, ia: "Cursor" })) { marcaArranque(hilo, "Cursor"); return true; }   // v506/v508
+  return false;
 }
 // ---------- apuntes de Humano (v39): notas por tema y recordatorios ----------
 // Fichero propio (~/.oficina/apuntes.json), fuera de ~/.config y ~/.canal-logs, que leen las IAs.
@@ -3510,11 +3525,11 @@ function enviar(req, res) {
           lanzarClaudeComoHumano(texto, k.ts, hilo, { escritura: true }); despierta.push("Claude");
           anota(`hilo ${hilo} OK de Humano desde la oficina ${k.ts}`);
           aviso = "✍️ OK enviado: Claude hace lo que propuso.";
-          if (/@cursor\b/i.test(texto)) { lanzarCursorComoHumano(texto, k.ts, hilo); despierta.push("Cursor"); }
+          if (/@cursor\b/i.test(texto)) { if (lanzarCursorComoHumano(texto, k.ts, hilo) === "sin saldo") aviso += " " + AVISO_SIN_SALDO; else despierta.push("Cursor"); }
         }
         else {
           if (/@claude\b/i.test(texto)) { lanzarClaudeComoHumano(texto, k.ts, hilo); despierta.push("Claude"); }
-          if (/@cursor\b/i.test(texto)) { lanzarCursorComoHumano(texto, k.ts, hilo); despierta.push("Cursor"); }
+          if (/@cursor\b/i.test(texto)) { if (lanzarCursorComoHumano(texto, k.ts, hilo) === "sin saldo") aviso = [aviso, AVISO_SIN_SALDO].filter(Boolean).join(" "); else despierta.push("Cursor"); }
         }
       }
       fin(200, { ok: true, url: enlace(k.ts, hilo), despierta, aviso });
@@ -3557,7 +3572,7 @@ function crearTema(req, res) {
       if (desp.includes("Coo")) { const sc = path.join(HOME, ".claude", "relevo", "herramientas", "avisar-coo.sh");
         if (lanzaScript([sc, CH, k.ts, "Humano", k.ts], `tema ${k.ts} aviso a Coo`, { hilo: k.ts, ia: "Coo" })) { despierta.push("Coo"); marcaArranque(k.ts, "Coo"); } }
       if (desp.includes("Claude")) { lanzarClaudeComoHumano(texto, k.ts, k.ts); despierta.push("Claude"); }
-      if (desp.includes("Cursor")) { lanzarCursorComoHumano(texto, k.ts, k.ts); despierta.push("Cursor"); }
+      if (desp.includes("Cursor") && lanzarCursorComoHumano(texto, k.ts, k.ts) !== "sin saldo") despierta.push("Cursor");
       fin(200, { ok: true, ts: k.ts, url: enlace(k.ts, k.ts), despierta });
       [1500, 11000, 22000].forEach((ms) => setTimeout(() => { tic(true).catch(() => {}); }, ms));
     } catch (e) { fin(502, { ok: false, error: limpiaErr(e.message) }); }
@@ -3970,6 +3985,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { limpiaErr, cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { limpiaErr, cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; } };

@@ -11,7 +11,9 @@ const RELANZA_MIN = 25, REINTENTO_MIN = 14, MAX_BLOQUES = 15;
 const PASADA_MAX_H = 64;
 function viejosPara(base, lim, baseMin) { return baseMin >= 0 && baseMin <= PASADA_MAX_H * 60 ? [base] : [base, lim]; }
 
-function decide({ tip, viejos, estado, ahora, ocupadas = {} }) {
+// sinSaldo: { Cursor: <el NO de cursor-arranques.log> } si Cursor está sin saldo de API en este canal (cursor-sin-saldo.js):
+// no se le lanza ni relanza; lo suyo queda apuntado (n: 0) y se lanza cuando haya un SI después (Humano a mano o vuelve el saldo).
+function decide({ tip, viejos, estado, ahora, ocupadas = {}, sinSaldo = {} }) {
   const bs = canal.leer(tip);
   const viejas = new Set();
   for (const t of viejos) for (const r of canal.partir(t)) viejas.add(canal.parse(r).clave);
@@ -24,17 +26,19 @@ function decide({ tip, viejos, estado, ahora, ocupadas = {} }) {
     if (!b || ahora - e.t0 > 24 * 3600e3) { delete est[k]; continue; }
     if (!b.faltan.includes(e.ia)) { acciones.push({ tipo: "CONTESTADO", ia: e.ia, b, k }); delete est[k]; continue; }
     if (e.n >= 3) continue;                                                  // ya avisado: la oficina lo enseña
+    if (sinSaldo[e.ia]) continue;                                            // sin saldo de API: ya avisado una vez, se espera
     if (e.n === 0) { if (ahora - e.t >= REINTENTO_MIN * 60e3) acciones.push({ tipo: (e.fallos || 0) >= 2 ? "SIN_RESPUESTA" : "LANZO", ia: e.ia, b, k }); continue; }
     if (ahora - e.t < RELANZA_MIN * 60e3) continue;
     if (e.n === 1 && ocupadas[e.ia] > e.t) continue;                         // otro la despertó después: se espera
     acciones.push({ tipo: e.n === 1 ? "RELANZO" : "SIN_RESPUESTA", ia: e.ia, b, k });
   }
-  const nuevos = [], esperan = [];
+  const nuevos = [], esperan = [], esperanSaldo = [];
   for (const b of bs) {
     const porContrato = !!(b.estado && b.estado.hace && b.estado.hace.length);
     if (viejas.has(b.clave) || !(AUTORES.includes(b.de) || porContrato) || !b.faltan.length) continue;
     for (const ia of b.faltan) {
       const k = b.clave + "|" + ia; if (est[k]) continue;
+      if (sinSaldo[ia]) { esperanSaldo.push({ ia, b, avisado: sinSaldo[ia].t }); est[k] = { clave: b.clave, ia, tit: b.tit.slice(0, 160), de: b.de, n: 0, t: ahora, t0: ahora, sinSaldo: true }; continue; }
       if (ocupadas[ia]) { esperan.push({ ia, b, desde: ocupadas[ia] }); est[k] = { clave: b.clave, ia, tit: b.tit.slice(0, 160), de: b.de, n: 1, t: ocupadas[ia], t0: ocupadas[ia], otro: true }; continue; }
       nuevos.push({ tipo: "LANZO", ia, b, k });
     }
@@ -42,10 +46,10 @@ function decide({ tip, viejos, estado, ahora, ocupadas = {} }) {
   const claves = [...new Set(nuevos.map((x) => x.b.clave))], nb = claves.length;
   if (nb > MAX_BLOQUES) {
     const quedan = new Set(claves.slice(-MAX_BLOQUES));   // los más nuevos (el canal va de viejo a nuevo)
-    return { acciones: acciones.concat(nuevos.filter((x) => quedan.has(x.b.clave))), esperan, estado: est,
+    return { acciones: acciones.concat(nuevos.filter((x) => quedan.has(x.b.clave))), esperan, esperanSaldo, estado: est,
       freno: `${nb} bloques nuevos piden algo a la vez (máx. ${MAX_BLOQUES}): despierto por los ${MAX_BLOQUES} más nuevos` };
   }
-  return { acciones: acciones.concat(nuevos), esperan, estado: est, freno: "" };
+  return { acciones: acciones.concat(nuevos), esperan, esperanSaldo, estado: est, freno: "" };
 }
 
 // primero se tapa el VALOR; después, las palabras que validar-nota.sh no deja pasar
@@ -71,6 +75,7 @@ function ejecuta(r, ctx) {
   const apunta = (tipo, ia, b, extra) => lineas.push([new Date(ahora).toISOString(), tipo, ia, ctx.canal, b.clave, (extra ? extra + " · " : "") + limpio(b.tit).slice(0, 140)].join("\t"));
   if (r.freno) dice.push("FRENO: " + r.freno);
   for (const x of r.esperan || []) { lineas.push([new Date(x.desde).toISOString(), "LANZO", x.ia, ctx.canal, x.b.clave, "(lo despertó otro) · " + limpio(x.b.tit).slice(0, 120)].join("\t")); dice.push(`${x.ia} ya lo despertó otro a las ${hhmm(x.desde)}: no lo duplico; sigo su respuesta a ${ref(x.b)}`); }
+  for (const x of r.esperanSaldo || []) dice.push(`${x.ia} sin saldo de API (ya avisado a las ${hhmm(x.avisado)}): no lo lanzo, se espera; queda apuntado ${ref(x.b)}`);
   for (const a of r.acciones.filter((x) => x.tipo === "CONTESTADO")) { apunta("CONTESTADO", a.ia, a.b); dice.push(`${a.ia} ya contestó a ${ref(a.b)}`); }
   for (const a of r.acciones.filter((x) => x.tipo === "SIN_RESPUESTA")) {
     est[a.k] = { ...(est[a.k] || {}), n: 3, t: ahora }; apunta("SIN_RESPUESTA", a.ia, a.b); dice.push(`SIN RESPUESTA de ${a.ia} a ${ref(a.b)}: lo enseña la oficina`);
@@ -115,7 +120,8 @@ if (require.main === module) {
     if (m && m[2] === can && m[3][0] === "2" && ahora - t < 30 * 60e3) ocupadas.Coo = Math.max(ocupadas.Coo || 0, t);
   }
   const baseMin = /^\d+$/.test(arg("base-min")) ? +arg("base-min") : -1;   // minutos desde la última pasada (-1: no hay)
-  const r = decide({ tip: lee(arg("tip")), viejos: viejosPara(lee(arg("base")), lee(arg("lim")), baseMin), estado, ahora, ocupadas });
+  const sinSaldo = {}; try { const no = require("./cursor-sin-saldo.js").bloqueoLog({ canal: can }, LOGS, ahora); if (no) sinSaldo.Cursor = no; } catch (e) {}
+  const r = decide({ tip: lee(arg("tip")), viejos: viejosPara(lee(arg("base")), lee(arg("lim")), baseMin), estado, ahora, ocupadas, sinSaldo });
   const AQUI = process.env.VIGIA_LANZADORES || __dirname;
   const BASH = process.env.CANAL_BASH || "bash";
   const lanzar = (ia, f) => {

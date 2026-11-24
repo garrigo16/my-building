@@ -208,6 +208,10 @@ async function conectar() {
     if (script === "atender-cursor-slack.sh" && Date.now() - (cursorNativo.get(hilo) || 0) < 15 * 60000) {
       log(`Cursor ya está en el hilo ${hilo} con su app: no lo lanzo por API`); return;
     }
+    if (script === "atender-cursor-slack.sh") {   // sin saldo de API en este hilo (y sin un SI después): ya se avisó una vez; se espera
+      let no = null; try { no = require("./cursor-sin-saldo.js").bloqueoLog({ hilo }, LOGS); } catch (x) {}
+      if (no) { log(`Cursor sin saldo de API en el hilo ${hilo} (ya avisado a las ${require("./cursor-sin-saldo.js").hhmm(no.t)}): no lo relanzo, se espera`); return; }
+    }
     if (script !== "atender-grok.sh" && activos.has(clave)) {
       if (quien !== "Humano") { log(`ya hay un ${script} trabajando en el hilo ${hilo}: no abro otro (releerá el hilo al terminar)`); return; }
       log(`ya hay un ${script} trabajando en el hilo ${hilo}: el mensaje de Humano espera su turno`);
