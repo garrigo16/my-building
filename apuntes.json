@@ -1,0 +1,28 @@
+{
+ "notas": {},
+ "recordatorios": [],
+ "ver": 2,
+ "ajustes": {
+  "cumple": "",
+  "aniversario": "",
+  "extra": [],
+  "plantillas": null,
+  "fijados": [],
+  "pausas": {
+   "Recibido": {
+    "t": 1795535770382,
+    "motivo": "Hoy no",
+    "hasta": 1795590000000
+   },
+   "SFEI-470, checkOnly y push": {
+    "t": 1795535772571,
+    "motivo": "Hoy no",
+    "hasta": 1795590000000
+   }
+  },
+  "cerrados": {},
+  "quitados": {},
+  "hilosHechos": {},
+  "pendientes": {}
+ }
+}
