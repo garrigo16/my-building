@@ -1,0 +1,11 @@
+# Los scripts de Bash y Node tienen que llegar con LF aunque Git esté en autocrlf (si no, Bash falla en el otro equipo)
+*.sh text eol=lf
+*.js text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.vbs text eol=crlf

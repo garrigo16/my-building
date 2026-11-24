@@ -1,0 +1,43 @@
+{
+  "persona": {
+    "nombre": "TU-NOMBRE",
+    "slackId": ""
+  },
+  "slack": {
+    "espacio": "https://ocaglobal-grupo.slack.com",
+    "canalId": "",
+    "canalNombre": "canal-TU-USUARIO",
+    "ias": {
+      "claude": "",
+      "coo": "",
+      "cursor": ""
+    }
+  },
+  "canalGit": {
+    "repoLocal": "~/Documents/Oca Global Repository/oca-salesforce",
+    "repoUrl": "https://bitbucket.org/oca-global/oca-salesforce",
+    "bitbucket": "oca-global/oca-salesforce",
+    "canales": [
+      {
+        "nombre": "principal",
+        "rama": "canal/TU-USUARIO/claude-cursor",
+        "fichero": "CANAL_CLAUDE_CURSOR.md"
+      }
+    ]
+  },
+  "jira": {
+    "sitio": "https://ocaglobal.atlassian.net"
+  },
+  "codex": {
+    "activo": false,
+    "modelo": ""
+  },
+  "oficina": {
+    "appId": "",
+    "proyectos": [],
+    "temas": [],
+    "visitantes": []
+  },
+  "coordinadores": [],
+  "actualizar": "manual"
+}
