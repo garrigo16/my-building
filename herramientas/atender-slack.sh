@@ -101,6 +101,18 @@ CLI=${CLAUDE_CLI:-$(ls -d $HOME/AppData/Roaming/Claude/claude-code/*/*/claude.ex
 CFG="$HOME/.config/canal-slack.env"
 CLAUDE_CODE_OAUTH_TOKEN=$(tr -d '\r' < "$CFG" | sed -n 's/^CLAUDE_CODE_OAUTH_TOKEN=//p' | tail -1 | tr -d "\"' ")
 [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && export CLAUDE_CODE_OAUTH_TOKEN
+# Relevo de cuenta (relevo-claude.js): empresa (Team) por defecto; ventana de 5 h o cupo semanal agotados -> UN relevo a la personal
+# (Pro: CLAUDE_CONFIG_DIR=~/.claude-personal, sin el token de empresa); si paran las dos, aviso y no se lanza a nadie.
+REL="$AQUI/relevo-claude.js"; CTA=empresa; HAY_REL=0
+[ -f "$REL" ] && command -v node >/dev/null 2>&1 && HAY_REL=1
+avisa_relevo() { [ -n "$1" ] && bash "$AQUI/avisar-humano.sh" "$1" >/dev/null 2>&1; return 0; }
+pasa_a_personal() { export CLAUDE_CONFIG_DIR="${USERPROFILE:-$HOME}/.claude-personal"; unset CLAUDE_CODE_OAUTH_TOKEN; CTA=personal; }
+if [ "$HAY_REL" = 1 ]; then
+  D_REL=$(node "$REL" decidir --lineas 2>/dev/null) || D_REL=""
+  C_REL=$(printf '%s\n' "$D_REL" | sed -n 1p | tr -d '\r'); avisa_relevo "$(printf '%s\n' "$D_REL" | sed -n 2p | tr -d '\r')"
+  [ "$C_REL" = personal ] && pasa_a_personal
+  if [ "$C_REL" = parar ]; then echo "$(date -Is) hilo $HILO: las dos cuentas de Claude agotadas, no lanzo" >> "$HOME/.canal-logs/sesiones-slack.log"; exit 0; fi
+fi
 # v276: Git Bash donde esté (%LOCALAPPDATA%\Programs\Git o %ProgramFiles%\Git, como acepta el instalador; si no, este mismo bash)
 gitbash() { local p; for p in "$HOME/AppData/Local/Programs/Git/bin/bash.exe" "$(cygpath -u "${PROGRAMFILES:-C:\\Program Files}")/Git/bin/bash.exe"; do
   [ -f "$p" ] && { cygpath -w "$p"; return; }; done; cygpath -w "$(command -v bash)"; }
@@ -251,7 +263,22 @@ if [ "$MIRADA" = 1 ]; then
     "Bash(*git push*)" "PowerShell(*git push*)" "Bash(*chat.postMessage*)" "PowerShell(*slack.com*)" )
 fi
 echo "$(date -Is) hilo $HILO modelo=$MODELO tope=$TOPE_USD$([ "$MIRADA" = 1 ] && printf ' mirada=1')" >> "$HOME/.canal-logs/sesiones-slack.log"
-llama_claude() {   # (v491: la misma llamada para la mirada y para la segunda fase)
+llama_claude() {   # relevo: si la cuenta de empresa topa con su cuota, UNA repeticion con la personal (nunca mas)
+  llama_una; local rc=$?
+  if [ "$HAY_REL" = 1 ] && [ "$CTA" = empresa ]; then
+    local F; F=$(node "$REL" fallo "$LOGF" empresa --lineas 2>/dev/null) || F=""
+    if [ "$(printf '%s\n' "$F" | sed -n 3p | tr -d '\r')" = cuota ]; then
+      avisa_relevo "$(printf '%s\n' "$F" | sed -n 2p | tr -d '\r')"
+      if [ "$(printf '%s\n' "$F" | sed -n 1p | tr -d '\r')" = personal ]; then pasa_a_personal; llama_una; rc=$?
+        F=$(node "$REL" fallo "$LOGF" personal --lineas 2>/dev/null) || F=""; avisa_relevo "$(printf '%s\n' "$F" | sed -n 2p | tr -d '\r')"; fi
+    fi
+  elif [ "$HAY_REL" = 1 ] && [ "$CTA" = personal ]; then   # ya relevada: si tambien topa, aviso con las dos horas y se acabo
+    local G; G=$(node "$REL" fallo "$LOGF" personal --lineas 2>/dev/null) || G=""
+    [ "$(printf '%s\n' "$G" | sed -n 3p | tr -d '\r')" = cuota ] && avisa_relevo "$(printf '%s\n' "$G" | sed -n 2p | tr -d '\r')"
+  fi
+  return $rc
+}
+llama_una() {   # (v491: la misma llamada para la mirada y para la segunda fase)
   "$CLI" -p "${SES[@]}" --model "$MODELO" --effort "$ESFUERZO" --permission-mode acceptEdits --strict-mcp-config "${MCP_ARGS[@]}" \
     --tools "Bash,Read,Grep,Glob,Edit,Write,Agent,PowerShell" --disable-slash-commands \
     --allowedTools "Bash Read Grep Glob Edit Write Agent PowerShell$PERM_NAV" \

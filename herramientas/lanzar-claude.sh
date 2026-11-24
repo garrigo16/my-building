@@ -67,13 +67,40 @@ EOF
 cd "$REPO"
 export CANAL_SOY_CLAUDE_HEADLESS=1
 # Desacoplado: el que lo lanza no espera. El prompt entra por stdin (las tildes no sobreviven al argv de Windows).
+# Relevo de cuenta (relevo-claude.js): empresa (Team) por defecto; si agota la ventana de 5 h o el cupo semanal, UN relevo a la
+# personal (Pro) con CLAUDE_CONFIG_DIR=~/.claude-personal y sin el token de empresa; si paran las dos, aviso y no se lanza.
 nohup bash -c '
-  "$0" -p --model claude-sonnet-5-5 --effort medium --permission-mode acceptEdits --strict-mcp-config \
-       --tools "Bash,Read,Grep,Glob,Edit,Write,Agent" --disable-slash-commands \
-       --allowedTools "Bash Read Grep Glob Edit Write Agent" \
-       --disallowedTools "PowerShell" "Bash(powershell*)" "Bash(pwsh*)" "Bash(sf *)" "Bash(*powershell.exe*)" \
-       --max-budget-usd 3 < "$1" > "$2" 2>&1
+  REL="$3/relevo-claude.js"; CTA=empresa; HAY=0
+  [ -f "$REL" ] && command -v node >/dev/null 2>&1 && HAY=1
+  avisa() { [ -n "$1" ] && [ -f "$3/avisar-humano.sh" ] && bash "$3/avisar-humano.sh" "$1" >/dev/null 2>&1; return 0; }
+  if [ "$HAY" = 1 ]; then
+    D=$(node "$REL" decidir --lineas 2>/dev/null) || D=""
+    CTA=$(printf "%s\n" "$D" | sed -n 1p | tr -d "\r"); CTA=${CTA:-empresa}; avisa "$(printf "%s\n" "$D" | sed -n 2p | tr -d "\r")" "" "$3"
+  fi
+  [ "$CTA" = parar ] && { rm -f "$1"; exit 0; }
+  pasa_a_personal() { export CLAUDE_CONFIG_DIR="${USERPROFILE:-$HOME}/.claude-personal"; unset CLAUDE_CODE_OAUTH_TOKEN; }
+  lanza() {
+    "$CLI" -p --model claude-sonnet-5-5 --effort medium --permission-mode acceptEdits --strict-mcp-config \
+         --tools "Bash,Read,Grep,Glob,Edit,Write,Agent" --disable-slash-commands \
+         --allowedTools "Bash Read Grep Glob Edit Write Agent" \
+         --disallowedTools "PowerShell" "Bash(powershell*)" "Bash(pwsh*)" "Bash(sf *)" "Bash(*powershell.exe*)" \
+         --max-budget-usd 3 < "$1" > "$2" 2>&1
+  }
+  CLI=$0
+  [ "$CTA" = personal ] && pasa_a_personal
+  lanza "$1" "$2"
+  if [ "$HAY" = 1 ]; then
+    F=$(node "$REL" fallo "$2" "$CTA" --lineas 2>/dev/null) || F=""
+    if [ "$(printf "%s\n" "$F" | sed -n 3p | tr -d "\r")" = cuota ]; then
+      avisa "$(printf "%s\n" "$F" | sed -n 2p | tr -d "\r")" "" "$3"
+      if [ "$CTA" = empresa ] && [ "$(printf "%s\n" "$F" | sed -n 1p | tr -d "\r")" = personal ]; then   # el unico relevo
+        pasa_a_personal; lanza "$1" "${2%.log}-personal.log"
+        F=$(node "$REL" fallo "${2%.log}-personal.log" personal --lineas 2>/dev/null) || F=""   # si tambien falla: aviso y no hay mas
+        avisa "$(printf "%s\n" "$F" | sed -n 2p | tr -d "\r")" "" "$3"
+      fi
+    fi
+  fi
   rm -f "$1"
-' "$CLI" "$PROMPTF" "$LOGF" >/dev/null 2>&1 &
+' "$CLI" "$PROMPTF" "$LOGF" "$AQUI" >/dev/null 2>&1 &
 disown
 echo "CLAUDE lanzado ($CANAL ${SHA:0:10}); log: $LOGF"
