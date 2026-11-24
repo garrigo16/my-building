@@ -6,5 +6,5 @@ const T = (hms) => new (global.FechaReal || Date)(`${DIA}T${hms.length === 5 ? h
 const ts = (hms) => (T(hms) / 1000).toFixed(6);
 const m = (hms, quien, texto, extra) => ({ ts: ts(hms), quien, texto, menc: [], ...(extra || {}) });
 // los logs del equipo, vacíos
-const LOGS0 = () => ({ arranquesCursor: [], frenos: [], avisosCoo: [], sesionHilo: {}, lanzHilo: {}, cursorSlack: [], esperas: [], ultEsc: 0, lanz: [], timbreHilo: "", traspasos: [] });
+const LOGS0 = () => ({ avisoClaude: "", arranquesCursor: [], frenos: [], avisosCoo: [], sesionHilo: {}, lanzHilo: {}, cursorSlack: [], esperas: [], ultEsc: 0, lanz: [], timbreHilo: "", traspasos: [] });
 module.exports = { DIA, T, ts, m, LOGS0 };

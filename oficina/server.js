@@ -930,7 +930,9 @@ function leerLogs() {
   const arranquesCursor = lineas(path.join(LOGS, "cursor-arranques.log"), 100).map((l) => {
     const m = l.match(/^(\S+) (SI|NO) (hilo|canal) (\S+)\s*(.*)$/); return m ? { t: ms(m[1]), ok: m[2] === "SI", hilo: m[3] === "hilo" ? m[4] : null, canal: m[3] === "canal" ? m[4] : null, info: m[5].slice(0, 160) } : null;
   }).filter((x) => x && ahora - x.t < 24 * 3600e3);
-  return { arranquesCursor, frenos: frenos.concat(frenosCoo), avisosCoo, sesionHilo, lanzHilo, colaHilo, nadaHilo, cursorSlack, esperas, ultEsc, lanz, conexion, escLineas: esc,
+  // relevo de Claude entre la cuenta de empresa y la personal (herramientas/relevo-claude.js deja el último aviso aquí)
+  let avisoClaude = ""; try { const j = JSON.parse(leer(path.join(LOGS, "claude-aviso.json"))); const t = ms(j.ts); if (j.aviso && ahora - t < 6 * 3600e3) avisoClaude = { aviso: String(j.aviso).slice(0, 400), t }; } catch {}
+  return { avisoClaude, arranquesCursor, frenos: frenos.concat(frenosCoo), avisosCoo, sesionHilo, lanzHilo, colaHilo, nadaHilo, cursorSlack, esperas, ultEsc, lanz, conexion, escLineas: esc,
     timbreHilo: leer(path.join(LOGS, "timbre-hilo.txt")).trim(), traspasos, delegados: leeDelegados(), juntados: leeJuntados(), estoyEnEllo: leeEnEllo() };
 }
 const TEXTO_EN_ELLO = "Lo he visto, estoy en ello 👀";
@@ -2154,8 +2156,8 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     estado: cooHilos.length ? "trabaja" : frenadoIA("Coo") ? "frenado" : "libre",
     tarea: cooHilos.length ? cooHilos.join(" · ") : frenadoIA("Coo") ? "frenado en algún hilo" : "esperando recados", ult: ultMsg("Coo"), url: cooTs[0] ? urlDe(cooTs[0]) : null });
   monis.push({ id: "claude-portero", nombre: "Claude", rol: "escucha de Slack", ia: "Claude",
-    estado: P ? (P.escucha ? (claudeVivos.length ? "trabaja" : "libre") : "caido") : "?",
-    tarea: P && !P.escucha ? "¡la escucha de Slack está CAÍDA!" : claudeVivos.length ? `${claudeVivos.length} Claude en hilos` : "de guardia, oyendo Slack", ult: ultMsg("Claude") });
+    estado: P ? (P.escucha ? (L.avisoClaude && /No lanzo a nadie/.test(L.avisoClaude.aviso) ? "frenado" : claudeVivos.length ? "trabaja" : "libre") : "caido") : "?",
+    tarea: P && !P.escucha ? "¡la escucha de Slack está CAÍDA!" : L.avisoClaude ? `⚠️ ${L.avisoClaude.aviso} (${hhmm(L.avisoClaude.t)})` : claudeVivos.length ? `${claudeVivos.length} Claude en hilos` : "de guardia, oyendo Slack", ult: ultMsg("Claude") });
   claudeVivos.forEach((p, i) => monis.push({ id: "claude-" + p.pid, nombre: "Claude #" + (i + 1), rol: "Claude de hilo", ia: "Claude",
     estado: p.activo === false ? "pensando" : "trabaja", tarea: tituloDe(p.hilo), desde: p.ini, url: urlDe(p.hilo) }));
   const cursorAg = (agentes || []).filter((a) => /RUNNING|CREATING|PENDING/i.test(a.run || ""));
