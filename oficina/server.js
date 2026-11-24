@@ -3104,6 +3104,11 @@ alAbrir(() => setInterval(() => { refrescaConfig().catch(() => {}); }, CFG_MEMOR
 const CLAVE = require("crypto").randomBytes(24).toString("hex");
 const HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`]);
 const MENC = { coo: CONF.slack.ias.coo, claude: CONF.slack.ias.claude, cursor: CONF.slack.ias.cursor };
+// @coo pasa a mención solo si hay un id real (el de ejemplo no es de nadie: el texto se queda con «@coo»)
+function textoConMenciones(texto, menc = MENC) {
+  const ejemplo = require("../herramientas/config.js").EJEMPLO.slack.ias.coo;
+  return String(texto).replace(/(^|[\s(])@(coo)\b/gi, (m, a, n) => (menc.coo && menc.coo !== ejemplo ? `${a}<@${menc.coo}>` : m));
+}
 // v63: escribir en el log de envíos nunca debe tumbar el servidor
 // v320: en las pruebas, lo que se anota se queda en memoria (anotados): antes iba al oficina-envios.log de verdad.
 const anotados = [];
@@ -3485,7 +3490,7 @@ function enviar(req, res) {
     if (!(estado.hilos || []).some((h) => h.ts === hilo)) return fin(400, { ok: false, error: "hilo desconocido" });
     const tok = tokenHumano();
     if (!tok) return fin(409, { ok: false, error: "falta el token en ~/.config/oficina-slack.env" });
-    const t = texto.replace(/(^|[\s(])@(coo)\b/gi, (_, a, n) => `${a}<@${MENC[n.toLowerCase()]}>`);
+    const t = textoConMenciones(texto);
     try {
       const k = await slackPost({ channel: CH, thread_ts: hilo, text: t }, tok);
       anota(`hilo ${hilo} ${k.ok ? "ok " + k.ts : "error " + k.error} (${texto.length} car.)`);
@@ -3565,7 +3570,7 @@ function crearTema(req, res) {
     if (j.prueba) return fin(200, { ok: true, prueba: true, texto });
     const tok = tokenHumano();
     if (!tok) return fin(409, { ok: false, error: "falta el token en ~/.config/oficina-slack.env" });
-    const t = texto.replace(/(^|[\s(])@(coo)\b/gi, (_, a, n) => `${a}<@${MENC[n.toLowerCase()]}>`);
+    const t = textoConMenciones(texto);
     try {
       const k = await slackPost({ channel: CH, text: t }, tok);
       anota(`tema nuevo «${titulo}» ${k.ok ? "ok " + k.ts : "error " + k.error}`);
@@ -3975,7 +3980,7 @@ if (servidor) servidor.on("error", (e) => {
   // v549: con el puerto ya nuestro, lo del arranque (antes no se ha tocado nada: una oficina de más no hace nada)
   for (const f of trasAbrir.splice(0)) { try { f(); } catch (e) { anota(`arranque: ${limpiaErr(e.message || String(e))}`); } }
   // v216: su pid, para que el vigía la pueda levantar si se cuelga (herramientas/vigila-oficina.js)
-  try { fs.mkdirSync(LOGS, { recursive: true }); fs.writeFileSync(path.join(LOGS, "oficina.pid"), String(process.pid)); } catch (e) {}
+  try { fs.mkdirSync(LOGS, { recursive: true }); fs.writeFileSync(path.join(LOGS, "oficina.pid"), String(process.pid)); fs.writeFileSync(path.join(LOGS, "oficina.puerto"), String(PORT)); } catch (e) {}
   // v547: cómo volvió del último estreno (relanzar-oficina.log), en su log: si fue con el arranque directo, que se sepa
   fs.promises.readFile(path.join(LOGS, "relanzar-oficina.log"), "utf8").then((t) => {
     const ls = t.replace(/^﻿/, "").split(/\r?\n/).filter(Boolean), i = ls.map((l) => /estreno \(pid/.test(l)).lastIndexOf(true); if (i < 0) return;   // (PowerShell 5.1 pone BOM al crearlo)
@@ -3987,6 +3992,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { limpiaErr, cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { textoConMenciones, limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; } };

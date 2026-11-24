@@ -74,7 +74,7 @@ if (require.main === module) {
   const log = (t) => { const d = new Date(), p = (n) => String(n).padStart(2, "0");
     fs.appendFileSync(path.join(LOGS, "vigia-canal.log"), `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} oficina: ${t}\n`); };
   const estrenoT = (() => { try { return fs.statSync(path.join(LOGS, "relanzar-oficina.ps1")).mtimeMs; } catch (e) { return 0; } })();
-  const puerto = +process.env.OFICINA_PORT || 4317, url = `http://127.0.0.1:${puerto}/`;
+  const puerto = +require("./puerto-oficina.js").puertoOficina({ logs: LOGS }) || 4317, url = `http://127.0.0.1:${puerto}/`;
   const esperar = async (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await contesta(url, 3e3)) return true; await new Promise((r) => setTimeout(r, 3e3)); } return false; };
   // ¿hay algún proceso de la oficina (aunque aún no conteste)? true / false / null (no se sabe)
   const hayOficina = async () => { try {

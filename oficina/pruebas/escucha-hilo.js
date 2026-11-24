@@ -9,7 +9,7 @@ module.exports = async ({ prueba, igual }) => {
     const T = fs.mkdtempSync(path.join(os.tmpdir(), "hilo-")), H = path.join(T, "herr"), HOME = path.join(T, "home");
     const YO = "UCLAUDE0001", COO = "UCOO0000001", JJ = "UHUMANO02";
     for (const d of [H, path.join(HOME, ".config"), path.join(HOME, ".canal-logs")]) fs.mkdirSync(d, { recursive: true });
-    for (const s of ["escucha-slack.js", "regla-ok.js", "git-bash.js"]) fs.copyFileSync(path.join(HERR, s), path.join(H, s));
+    for (const s of ["escucha-slack.js", "regla-ok.js", "git-bash.js", "puerto-oficina.js"]) fs.copyFileSync(path.join(HERR, s), path.join(H, s));
     const llamadas = path.join(T, "llamadas.txt").replace(/\\/g, "/");
     fs.writeFileSync(path.join(H, "atender-slack.sh"), `#!/usr/bin/env bash\nq=$(node -e 'const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(j.quien+":"+j.ts)' "$1"); rm -f "$1"\necho "empieza $q" >> '${llamadas}'\nsleep 3\necho "acaba $q" >> '${llamadas}'\n`);
     for (const s of ["atender-cursor-slack.sh", "atender-grok.sh", "avisar-coo.sh"]) fs.writeFileSync(path.join(H, s), `#!/usr/bin/env bash\n[ -f "\${1:-}" ] && rm -f "$1"\necho "${s}" >> '${llamadas}'\n`);

@@ -14,10 +14,11 @@ const LOGS = path.join(HOME, ".canal-logs");
 fs.mkdirSync(LOGS, { recursive: true });
 const LOGF = path.join(LOGS, "escucha-slack.log");
 const log = (m) => fs.appendFileSync(LOGF, `${new Date().toISOString()} ${m}\n`);
-const PUERTO_OFI = process.env.OFICINA_PORT || (process.env.CANAL_PRUEBAS === "1" ? "" : "4317");
 function toqueOficina(datos) {
-  if (!PUERTO_OFI) return;
-  try { fetchSinTope(`http://127.0.0.1:${PUERTO_OFI}/api/toque`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos || {}), signal: AbortSignal.timeout(2000) }).catch(() => {}); } catch (e) {}
+  // el puerto se calcula en cada toque: la Oficina puede arrancar con otro puerto
+  const puerto = require("./puerto-oficina.js").puertoOficina({ logs: LOGS, pruebas: process.env.CANAL_PRUEBAS === "1" });
+  if (!puerto) return;
+  try { fetchSinTope(`http://127.0.0.1:${puerto}/api/toque`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos || {}), signal: AbortSignal.timeout(2000) }).catch(() => {}); } catch (e) {}
 }
 const IA_DE_SCRIPT = { "atender-slack.sh": "Claude", "atender-cursor-slack.sh": "Cursor", "atender-grok.sh": "Coo" };
 
@@ -179,6 +180,11 @@ async function conectar() {
       if (meNombra && normal) { quien = "Coo"; script = "atender-slack.sh"; }
       else { log(`mensaje con la cuenta de Humano vía app ${e.app_id}: no es Humano, lo ignoro`); return; }
     } else if (e.user === c.SLACK_HUMANO_ID) {
+      // mensaje del panel que nombra a una IA o es un OK corto: la Oficina ya lo ha lanzado
+      if (e.app_id && e.app_id === APP_OFI && (/(^|[\s(])@(claude|cursor|coo)\b/i.test(txtM) || meNombra || nombraCursor || txtM.includes(`<@${COO}>`) || esOkCorto(txtM))) {
+        log(`mensaje del panel (${e.ts}): ya lo lanza la Oficina, no lo lanzo otra vez`);
+        return;
+      }
       quien = "Humano";
       if (e.type === "app_mention") script = "atender-slack.sh";
       else if (normal && /(^|\s)@grok\b/i.test(txt)) script = "atender-grok.sh";

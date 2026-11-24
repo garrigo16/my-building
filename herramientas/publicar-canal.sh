@@ -79,8 +79,14 @@ for intento in $(seq 1 "$MAX"); do
     if [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$RAMA")" ]; then
       git rev-parse HEAD > "$ESTADO"
       echo "PUBLICADO $(git rev-parse --short HEAD) en $RAMA (intento $intento)"
+      # puerto: OFICINA_PORT, o el que deja la Oficina en oficina.puerto, o 4317
+      PTO=${OFICINA_PORT:-}
+      if [ -z "$PTO" ] && [ -f "$HOME/.canal-logs/oficina.puerto" ]; then
+        PTO=$(tr -d '\r\n ' < "$HOME/.canal-logs/oficina.puerto")
+        case "$PTO" in ''|*[!0-9]*) PTO= ;; esac
+      fi
       if [ -f "$HOME/.canal-logs/oficina.pid" ]; then
-        curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' --data '{"git":true}' "http://127.0.0.1:${OFICINA_PORT:-4317}/api/toque" >/dev/null 2>&1 || true
+        curl -s -m 2 -o /dev/null -X POST -H 'Content-Type: application/json' --data '{"git":true}' "http://127.0.0.1:${PTO:-4317}/api/toque" >/dev/null 2>&1 || true
       fi
       if [ -n "${NOTA:-}" ]; then
         RC=0
