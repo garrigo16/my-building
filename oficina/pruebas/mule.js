@@ -64,7 +64,7 @@ globalThis.fetch = async (url, o = {}) => {
       igual([w.status, /^mule: uso: entornos \| apps/.test(w.stderr)], [2, true], "mule.sh (lo que usan las IAs) llega a mule.js con la ruta de Windows bien");
       mule(["logs", "QA", "app-qa"]); const todas = llamadas();
       igual(todas.filter((x) => x.metodo !== "GET").map((x) => x.url), ["https://anypoint.mulesoft.com/accounts/api/v2/oauth2/token"], "solo GET, salvo el POST del token");
-      igual(todas.slice(1).every((x) => x.auth === "Bearer tok-falso-anypoint-999"), true, "con el token de la Connected App");
+      igual(todas.slice(1).every((x) => x.auth === "Bearer tok-falso-acceso"), true, "con el token de la Connected App");
     } finally { fs.rmSync(T, { recursive: true, force: true }); }
   });
 };
