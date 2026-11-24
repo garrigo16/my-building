@@ -29,6 +29,8 @@ bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$F" >/dev/null; RC=$?; rm -f "$F"
 echo "$(date -Is) timbre ($CANAL ${SHA:0:10}) para: ${PARA:-?} rc=$RC" >> "$L/timbre.log"
 # Coo no tiene lanzador propio: si el bloque es para Coo, se le despierta por su routine con este hilo.
 if printf '%s' "$PARA" | grep -qi 'coo'; then
-  FRENO_HILO=- bash "$AQUI/avisar-coo.sh" "$CH" "$HILO" "el canal git ($CANAL, sha ${SHA:0:10})" >/dev/null 2>&1 &
+  # COO_BLOQUE: el texto del bloque va en el JSON a Coo (avisar-coo.sh lo recorta); el texto y no la ruta, porque esto
+  # corre en segundo plano y quien llama puede borrar $NOTA antes.
+  COO_BLOQUE="${NT:0:16000}" FRENO_HILO=- bash "$AQUI/avisar-coo.sh" "$CH" "$HILO" "el canal git ($CANAL, sha ${SHA:0:10})" >/dev/null 2>&1 &
 fi
 exit $RC

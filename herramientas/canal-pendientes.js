@@ -125,7 +125,7 @@ if (require.main === module) {
     if (ia === "Coo") {   // Coo no tiene lanzador: su routine, por el hilo del timbre (como timbre.sh)
       const hilo = lee(path.join(LOGS, "timbre-hilo.txt")).trim(); if (!hilo) return 97;
       return spawnSync(BASH, [path.join(AQUI, "avisar-coo.sh"), process.env.SLACK_CANAL_ID || "CCANAL00001", hilo, `el canal git (${can}, sha ${arg("sha").slice(0, 10)}): te piden algo en un bloque`],
-        { stdio: "ignore", timeout: 90e3, env: { ...process.env, FRENO_HILO: "-" } }).status ?? 98;
+        { stdio: "ignore", timeout: 90e3, env: { ...process.env, FRENO_HILO: "-", COO_BLOQUE: lee(f).slice(0, 16000) } }).status ?? 98;   // la nota va en el JSON (campo bloque)
     }
     return 96;
   };

@@ -44,8 +44,23 @@ CH="$CH" HILO="$HILO" TS="$TS" QUIEN="$QUIEN" VARIAS="$VARIAS" OUT="$BODY" node 
   const personas = "PROHIBIDO escribir a una persona (Slack, correo, Google Chat) desde tu app o bot, ni «de parte de Humano». Prepara el texto exacto y pide el OK con [te toca: ¿OK a enviar esto a X?]; sale siempre desde la cuenta de Humano (o se lo dejas listo para copiar).";
   const formato = "A Humano, escueto: 1.ª línea en negrita (*así*), el siguiente paso (su pregunta exacta o lo que harás tú y cuándo); luego como mucho 3 puntos de una línea; sin historia ni jerga (ni shas ni ids); máx. 5 líneas. ÚLTIMA línea, UNA etiqueta: [te toca: <pregunta exacta>] · [lo hace: Claude|Cursor|Coo — <qué>] (con OK, las dos) · [espera: <persona> — <qué>] · [espera: proceso <qué> — <cómo se mira>] · [hecho]. Antes de parar, lee todo el tema (hilos de 72 h, canal git, rama o PR). Si pides OK a algo que sale (correo, chat), pega debajo el texto completo. Canal git: «estado: lo hace|te toca|espera|hecho — …» en la cabecera; un tema y una pregunta por bloque. Pauta completa: herramientas/formato-para-humano.txt.";
   const convenios = "PR: «LÍNEA | TICKET | Descripción» (TRANSVERSAL, INDUSTRIA, CERTIFICACION, INTERNACIONAL, FORMACION, DTT); la abre Claude (abrir-pr.sh) con el OK de Humano. Cursor y tú sois SOLO LECTURA: el código lo escribe y lo sube Claude ([lo hace: Claude — …]). A Humano, UNA pregunta por asunto, en llano, con la opción recomendada y el cruce 3/3. Bloque que ya no vale: accion: correccion + responde-a: <id>, o «X queda retenido». Tareas de una IA: «Encargo a <IA>:».";
-  require("fs").writeFileSync(e.OUT, JSON.stringify({ instruccion, personas, tipo: "slack", canal: e.CH, hilo: e.HILO, mensaje: e.TS, enlace, quien: e.QUIEN,
-    responder_en: deIA ? "canal_git" : "slack", formato, convenios }));'
+  const obj = { instruccion, personas, tipo: "slack", canal: e.CH, hilo: e.HILO, mensaje: e.TS, enlace, quien: e.QUIEN,
+    responder_en: deIA ? "canal_git" : "slack", formato, convenios };
+  // bloque: el texto del bloque del canal git que originó el aviso (COO_BLOQUE, lo pasan timbre.sh y canal-pendientes.js).
+  // Solo si no es Humano y hay bloque de verdad; secretos tapados y recortado para que el cuerpo entero quede < 3584 bytes.
+  let bl = deIA ? String(e.COO_BLOQUE || "").replace(/\r/g, "").trim() : "";
+  if (bl) { try { bl = require(process.argv[1]).tapaSecretos(bl); } catch (x) {} }
+  if (bl) {
+    const TOPE = 3584, mide = (t) => Buffer.byteLength(JSON.stringify({ ...obj, bloque: t }));
+    let cs = Array.from(bl);
+    if (mide(bl) >= TOPE) {
+      let lo = 0, hi = cs.length;   // el prefijo más largo (con «…») que cabe
+      while (lo < hi) { const m = (lo + hi + 1) >> 1; if (mide(cs.slice(0, m).join("") + "…") < TOPE) lo = m; else hi = m - 1; }
+      bl = lo ? cs.slice(0, lo).join("") + "…" : "";
+    }
+    if (bl) obj.bloque = bl;
+  }
+  require("fs").writeFileSync(e.OUT, JSON.stringify(obj));' "$AQUI/tapar-secretos.js"
 printf 'header = "Authorization: Bearer %s"\n' "$COO_WEBHOOK_KEY" > "$CC"
 CODE=$(curl -sS -m 30 -K "$CC" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "@$BODY" "$COO_WEBHOOK_URL" 2>/dev/null || echo 000)
 echo "$(date -Is) webhook de Coo (hilo $HILO, de $QUIEN): http $CODE" >> "$LOGF"
