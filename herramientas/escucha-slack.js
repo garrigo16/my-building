@@ -115,6 +115,9 @@ async function conectar() {
     if (env.type !== "events_api") return;
     const e = env.payload && env.payload.event;
     if (!e) return;
+    // solo el canal de la config (SLACK_CANAL_ID): lo de otros canales ni se atiende ni lanza nada (el acuse ya se ha enviado)
+    const CANAL = canalDe(c);
+    if (CANAL && e.channel !== CANAL) { log(`evento ${e.type} de ${e.user || e.bot_id} en ${e.channel}: no es el canal ${CANAL}, lo ignoro`); return; }
     const YO = c.SLACK_CLAUDE_ID || "UCLAUDE0001";
     const COO = c.SLACK_COO_ID || "UCOO0000001", CURSOR = c.SLACK_CURSOR_ID || "UCURSOR0001";
     const IAS = { [COO]: "Coo", [CURSOR]: "Cursor" };
@@ -127,6 +130,15 @@ async function conectar() {
     const nombraCursor = txtM.includes(`<@${CURSOR}>`);
     const normal = e.type === "message" && (!e.subtype || e.subtype === "thread_broadcast" || e.subtype === "bot_message");
     const llamaACoo = txt.includes(`<@${COO}>`) || /(^|[\s(])@coo(-coordinador)?\b/i.test(txt);
+    // el conector de Coo publica con la cuenta de Humano, sin la app de la Oficina, y empieza por «Coo:»: es Coo, no Humano.
+    // No despierta a nadie salvo un [lo hace: Claude|Cursor] explícito; nunca avisar-coo.sh (aunque nombre a Coo o lleve [lo hace: Coo]).
+    if (e.user === c.SLACK_HUMANO_ID && /^\s*Coo:/.test(txt)) {
+      let a = "";
+      if (normal && haceIA(txtM, "cursor")) { lanzar(e, "atender-cursor-slack.sh", "Coo", txt); a += " Cursor"; }
+      if (normal && haceIA(txtM, "claude")) { lanzar(e, "atender-slack.sh", "Coo", txt); a += " Claude"; }
+      if (e.type === "message") log(`mensaje de Coo (prefijo «Coo:») en ${e.channel} (${e.ts}): ${a ? "despierto a" + a : "no despierta a nadie"}`);
+      return;
+    }
     if (false && (e.user === YO || e.user === CURSOR) && normal && llamaACoo
         && !txt.includes(`<@${c.SLACK_HUMANO_ID}>`) && !vistos.has(`coo:${e.ts}`)) {
       vistos.add(`coo:${e.ts}`);
@@ -163,7 +175,7 @@ async function conectar() {
       quien = "Coo"; script = "atender-slack.sh";
     } else if (e.user === YO) {
       return;
-    } else if (e.user === c.SLACK_HUMANO_ID && e.app_id) {
+    } else if (e.user === c.SLACK_HUMANO_ID && e.app_id && e.app_id !== APP_OFI) {   // la app de la Oficina publica por Humano: cuenta como Humano (abajo)
       if (meNombra && normal) { quien = "Coo"; script = "atender-slack.sh"; }
       else { log(`mensaje con la cuenta de Humano vía app ${e.app_id}: no es Humano, lo ignoro`); return; }
     } else if (e.user === c.SLACK_HUMANO_ID) {
@@ -218,6 +230,11 @@ function yaRelanzado(hilo, ts, f = path.join(LOGS, "traspasos.log")) {
   let t = ""; try { t = fs.readFileSync(f, "utf8").slice(-200000); } catch (e) { return false; }
   const clave = `slack:${hilo}:${ts}`;   // línea: <iso> RELANZO <IA> slack <clave> <qué>, separada por tabuladores
   return t.split("\n").some((l) => { const c = l.split("\t"); return c[1] === "RELANZO" && c[3] === "slack" && c[4] === clave; });
+}
+// el canal que se escucha: SLACK_CANAL_ID de canal-slack.env o, si no está, el slack.canalId de la config (si no es el de ejemplo)
+function canalDe(c) {
+  if (c.SLACK_CANAL_ID) return c.SLACK_CANAL_ID;
+  try { const C = require("./config.js"), id = C.config().slack.canalId; return id && id !== C.EJEMPLO.slack.canalId ? id : ""; } catch (err) { return ""; }
 }
 function esOkCorto(t) { return require(path.join(AQUI, "regla-ok.js")).esOk(t); }
 function haceIA(t, ia) {

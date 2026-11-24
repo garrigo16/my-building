@@ -31,19 +31,21 @@ if [ "$QUIEN" != "Humano" ] && ! bash "$AQUI/freno.sh" coo "${FRENO_HILO:-$HILO}
 fi
 BODY=$(mktemp); CC=$(umask 077; mktemp)
 trap 'rm -f "$BODY" "$CC"' EXIT
-FORMATO_J=$(tr -d '\r' < "$AQUI/formato-para-humano.txt" 2>/dev/null)   # v146: la misma pauta para todas las IAs
-CH="$CH" HILO="$HILO" TS="$TS" QUIEN="$QUIEN" VARIAS="$VARIAS" OUT="$BODY" FORMATO_J="$FORMATO_J" node -e '
+# El destino corta el JSON hacia los 4 KiB: el cuerpo entero va por debajo de 3584 bytes (prueba aviso-coo-body.js).
+# instruccion y personas, lo primero; formato y convenios, breves y propios de este aviso (formato-para-humano.txt
+# entero no cabe: la pauta completa está en el repo) y sin repetir formato dentro de instruccion.
+CH="$CH" HILO="$HILO" TS="$TS" QUIEN="$QUIEN" VARIAS="$VARIAS" OUT="$BODY" node -e '
   const e=process.env;
   const enlace=(e.SLACK_WS_URL||"https://ocaglobal-grupo.slack.com")+"/archives/"+e.CH+"/p"+e.TS.replace(".","")+"?thread_ts="+e.HILO+"&cid="+e.CH;
   const deIA = e.QUIEN !== "Humano";
-  require("fs").writeFileSync(e.OUT, JSON.stringify({ tipo: "slack", canal: e.CH, hilo: e.HILO, mensaje: e.TS, enlace, quien: e.QUIEN,
-    responder_en: deIA ? "canal_git" : "slack",
-    convenios: "Títulos de PR de OCA: «LÍNEA | TICKET | Descripción» (p. ej. «INDUSTRIA | BDXN-401 | …», «TRANSVERSAL | PRJB-1296 | …»; líneas TRANSVERSAL, INDUSTRIA, CERTIFICACION, INTERNACIONAL, FORMACION, DTT). Para abrir una PR, pídeselo a Claude (abrir-pr.sh) con el OK de Humano. v374: Cursor y tú sois SOLO LECTURA (ni commits, ni ramas, ni PRs): el código lo escribe y lo sube CLAUDE. Si Humano pide «arreglarlo», encarga a Cursor el diff exacto y a Claude aplicarlo, subir la rama y abrir la PR ([lo hace: Claude — …]); nunca «Cursor implementa en una rama», que no puede. v398 (Humano: «me estáis pasando cosas muy técnicas, dije que me viniera filtrado»): a Humano, UNA pregunta por asunto, en lenguaje llano y con la opción recomendada, y solo cuando el cruce esté 3/3. Si un bloque ya no vale, dilo en la cabecera (accion: correccion, responde-a: ese id) o con «X queda retenido / sustituye a X»: la oficina lo quita de «Te toca». Las tareas para una IA van bajo «Encargo a <IA>:» (no son opciones de Humano). «te toca: la persona A — …» es para la persona A, no para Humano.",
-    formato: e.FORMATO_J || "",
-    personas: "PROHIBIDO escribir a una persona (Slack, correo, Google Chat) desde tu app o bot, ni «de parte de Humano». Prepara el texto exacto y pide el OK con [te toca: ¿OK a enviar esto a X?]; sale siempre desde la cuenta de Humano (o se lo dejas listo para copiar).",
-    instruccion: (deIA
-      ? `Te despierta ${e.QUIEN}, una IA, no Humano. Regla de Humano: entre IAs se contesta SIEMPRE por el canal git (un bloque con su nota), nunca en el hilo de Slack. Escribe en Slack solo si el mensaje es para Humano (una decisión que solo puede tomar él, un OK de escritura o un resultado final en 3 líneas).`
-      : "Te escribe Humano: contéstale en este hilo de Slack." + (e.VARIAS ? " Os ha escrito a VARIOS (Claude y/o Cursor también) y quiere UNA sola respuesta: la das TÚ. Ahora, solo una línea: «Lo junto con Claude y Cursor y te traigo una sola respuesta» y [lo hace: Coo — juntar la respuesta]. Ellos te pasan su parte por el canal git (te despierta el timbre); entonces das la respuesta única." : "")) + (e.FORMATO_J ? "\n" + e.FORMATO_J : "") }));'
+  const instruccion = deIA
+    ? `Te despierta ${e.QUIEN}, una IA, no Humano. Regla de Humano: entre IAs se contesta SIEMPRE por el canal git (un bloque con su nota), nunca en el hilo de Slack. Escribe en Slack solo si el mensaje es para Humano (una decisión que solo puede tomar él, un OK de escritura o un resultado final en 3 líneas).`
+    : "Te escribe Humano: contéstale en este hilo de Slack." + (e.VARIAS ? " Os ha escrito a VARIOS (Claude y/o Cursor también) y quiere UNA sola respuesta: la das TÚ. Ahora, solo una línea: «Lo junto con Claude y Cursor y te traigo una sola respuesta» y [lo hace: Coo — juntar la respuesta]. Ellos te pasan su parte por el canal git (te despierta el timbre); entonces das la respuesta única." : "");
+  const personas = "PROHIBIDO escribir a una persona (Slack, correo, Google Chat) desde tu app o bot, ni «de parte de Humano». Prepara el texto exacto y pide el OK con [te toca: ¿OK a enviar esto a X?]; sale siempre desde la cuenta de Humano (o se lo dejas listo para copiar).";
+  const formato = "A Humano, escueto: 1.ª línea en negrita (*así*), el siguiente paso (su pregunta exacta o lo que harás tú y cuándo); luego como mucho 3 puntos de una línea; sin historia ni jerga (ni shas ni ids); máx. 5 líneas. ÚLTIMA línea, UNA etiqueta: [te toca: <pregunta exacta>] · [lo hace: Claude|Cursor|Coo — <qué>] (con OK, las dos) · [espera: <persona> — <qué>] · [espera: proceso <qué> — <cómo se mira>] · [hecho]. Antes de parar, lee todo el tema (hilos de 72 h, canal git, rama o PR). Si pides OK a algo que sale (correo, chat), pega debajo el texto completo. Canal git: «estado: lo hace|te toca|espera|hecho — …» en la cabecera; un tema y una pregunta por bloque. Pauta completa: herramientas/formato-para-humano.txt.";
+  const convenios = "PR: «LÍNEA | TICKET | Descripción» (TRANSVERSAL, INDUSTRIA, CERTIFICACION, INTERNACIONAL, FORMACION, DTT); la abre Claude (abrir-pr.sh) con el OK de Humano. Cursor y tú sois SOLO LECTURA: el código lo escribe y lo sube Claude ([lo hace: Claude — …]). A Humano, UNA pregunta por asunto, en llano, con la opción recomendada y el cruce 3/3. Bloque que ya no vale: accion: correccion + responde-a: <id>, o «X queda retenido». Tareas de una IA: «Encargo a <IA>:».";
+  require("fs").writeFileSync(e.OUT, JSON.stringify({ instruccion, personas, tipo: "slack", canal: e.CH, hilo: e.HILO, mensaje: e.TS, enlace, quien: e.QUIEN,
+    responder_en: deIA ? "canal_git" : "slack", formato, convenios }));'
 printf 'header = "Authorization: Bearer %s"\n' "$COO_WEBHOOK_KEY" > "$CC"
 CODE=$(curl -sS -m 30 -K "$CC" -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "@$BODY" "$COO_WEBHOOK_URL" 2>/dev/null || echo 000)
 echo "$(date -Is) webhook de Coo (hilo $HILO, de $QUIEN): http $CODE" >> "$LOGF"

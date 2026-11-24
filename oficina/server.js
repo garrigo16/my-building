@@ -680,8 +680,10 @@ async function repliesTodas(ts) {
   return { messages: todas };
 }
 const APP_OFICINA = process.env.OFICINA_APP_ID || CONF.oficina.appId || "AOFICINA001";
+const esPrefijoCoo = (t) => /^\s*Coo:/.test(String(t || ""));
 function quien(m) {
   if (/^\s*\*?Cursor \(v[ií]a API\)/.test(m.text || "")) return "Cursor";
+  if (m.user === HUMANO && esPrefijoCoo(m.text)) return "Coo";   // el conector de Coo publica con la cuenta de Humano: «Coo: …»
   if (m.user === HUMANO && (m.app_id || m.bot_id) && m.app_id !== APP_OFICINA) {
     const t = m.text || "";
     if (/^\s*(?:💬|:speech_balloon:)?\s*\*?Charla\*?\s*:/i.test(t) || /Origen:\s*\*?Chat\b/i.test(t)) return "Charla";
@@ -1668,6 +1670,12 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
         else { estado = "espera_ia"; motivo = `➡️ ${que}`; }
       } else if (etq.hecho) { estado = "cerrado"; espera = []; motivo = `✔ cerrado en el hilo (hecho${etq.hecho !== true ? ": " + etq.hecho : ""})`; }
     }
+    // un mensaje de Coo (también el «Coo:» que publica su conector con la cuenta de Humano) no deja el tema esperando a Coo
+    if (ult.quien === "Coo" && espera.includes("Coo") && !enMarcha.length) {
+      espera = espera.filter((x) => x !== "Coo");
+      if (propio && propio.ia === "Coo") propio = null;
+      if (!espera.length && ["espera_ia", "parado", "olvidado"].includes(estado)) estado = "pausa";
+    }
     if (!enMarcha.length && typeof prEstado === "object") {
       const iaMsgs = conv.filter((m) => m.quien !== "Humano" && ahora - tsMs(m.ts) < 48 * 3600e3);
       const conPlan = (m) => /(cuando|tras|despu[eé]s de|en cuanto)[^.]{0,80}#\d{3,5}[^.]{0,200}\b\w+(ar|er|ir)[eé]\b/i.test(textoPlano(m.texto).replace(/\[[^\]]*\]/g, ""));
@@ -2403,7 +2411,9 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
   const resueltos = apJ.cerrados || {};
   const deTi = hilos.filter((h) => h.estado === "humano" && !(resueltos[h.tema || h.titulo] && ((h.ult && h.ult.t) || 0) <= resueltos[h.tema || h.titulo] + 60e3)).map((h) => ({ tipo: "hilo", hilo: h.ts, titulo: h.titulo, quien: h.ult.quien, texto: h.ult.texto, url: h.url, t: h.desde, cruzado: h.cruzado, opciones: h.opciones, pideOk: h.pideOk }))
     .concat(sueltas.map((x) => ({ tipo: "timbre", titulo: "Decisión del canal git (sin tema: ábrela)", quien: "canal", texto: x.texto, url: x.url, t: x.t, cruzado: [], opciones: [] })));
-  return { hilos, monis, deTi, frenosHora: L.lanz.length, relanzar };
+  // un mensaje de Coo nunca relanza a Coo (avisar-coo.sh); un [lo hace: Claude|Cursor] suyo sí despierta a esa IA
+  const deCoo = new Set(hilosSlack.flatMap((h) => h.msgs.filter((m) => m.quien === "Coo").map((m) => m.ts)));
+  return { hilos, monis, deTi, frenosHora: L.lanz.length, relanzar: relanzar.filter((r) => !(r.ia === "Coo" && deCoo.has(r.ts))) };
 }
 
 // ---------- historial de la semana (v30): temas nuevos y mensajes por persona, los últimos 7 días ----------
