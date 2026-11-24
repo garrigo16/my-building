@@ -18,8 +18,8 @@ if [ $SECO = 0 ] && [ $YA = 0 ] && { [ "$D" -gt 5 ] || [ "$H" -lt 8 ] || [ "$H" 
 EQF="$HOME/.config/oficina-equipo.txt"
 if [ $SECO = 0 ] && [ -s "$EQF" ]; then
   EQ=$(tr -d '\r\n ' < "$EQF")
-  # el Edificio no es repo git: el turno se lee (solo ls-remote, lectura) desde CANAL_REPO (config.local.json canalGit.repoLocal)
-  TREPO=${CANAL_REPO:-"$AQUI/.."}
+  # el turno vive en el origin del propio Edificio (solo ls-remote, lectura); CANAL_REPO es otro repo y no tiene tags turno-*
+  TREPO=${VIGIA_TURNO_REPO:-"$AQUI/.."}
   T=$(timeout 30 git -C "$TREPO" ls-remote origin 'refs/tags/turno-*' 2>/dev/null | sed -n 's#.*refs/tags/turno-\([A-Za-z0-9_-]*\).*#\1#p' | head -1)
   if [ -z "$T" ]; then log "no puedo leer el turno (¿sin red?): esta pasada no miro"; exit 0; fi
   if [ "$T" != "$EQ" ]; then
