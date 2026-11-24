@@ -1,7 +1,7 @@
 {
  "notas": {},
  "recordatorios": [],
- "ver": 2,
+ "ver": 3,
  "ajustes": {
   "cumple": "",
   "aniversario": "",
@@ -16,6 +16,11 @@
    },
    "SFEI-470, checkOnly y push": {
     "t": 1795535772571,
+    "motivo": "Hoy no",
+    "hasta": 1795590000000
+   },
+   "SFEI-1290 Signaturit, PR #4989 a QA": {
+    "t": 1795537467422,
     "motivo": "Hoy no",
     "hasta": 1795590000000
    }
