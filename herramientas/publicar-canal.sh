@@ -67,9 +67,7 @@ for intento in $(seq 1 "$MAX"); do
     if grep -q $'\r' "$f"; then echo "CR en $f" >&2; exit 4; fi
   done
   [ ${#ANEXOS[@]} -gt 0 ] && git add -- "${ANEXOS[@]}"
-  git commit -q -m "$MSG
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -- "$FICH" "${ANEXOS[@]}"
+  git commit -q -m "$MSG" -- "$FICH" "${ANEXOS[@]}"
   PUSHERR=""
   if PUSHERR=$(git push -q origin "HEAD:refs/heads/$RAMA" 2>&1); then
     # Cursor 478 (hueco 5): si el fetch de verificación falla tras un push bueno, NO se reaplica.
