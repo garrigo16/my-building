@@ -1917,7 +1917,8 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     const arrH = arrC.filter((a) => a.hilo === h.ts && a.t > tJx - 2 * MIN), falloC = arrH.length && !arrH[arrH.length - 1].ok ? arrH[arrH.length - 1] : null;
     const cursorLuego = falloC && (arrC.some((a) => a.ok && a.t > falloC.t) || enGit.some((b) => b.de === "Cursor" && b.t > falloC.t));
     if (falloC && !cursorLuego && !enMarcha.includes("Cursor") && estado !== "cerrado")
-      motivo += ` · ⚠️ Cursor no arrancó (${hhmm(falloC.t)}: ${(falloC.info.match(/http \S+/) || ["la API no respondió"])[0].replace(/http 000\S*/, "la API no respondió")})`;
+      motivo += ` · ⚠️ Cursor no arrancó (${hhmm(falloC.t)}: ${/usage_limit_exceeded|sin saldo de API/i.test(falloC.info) ? "sin saldo de API, recarga en tu facturación de Cursor"
+        : (falloC.info.match(/http \S+/) || ["la API no respondió"])[0].replace(/http 000\S*/, "la API no respondió")})`;
     const rel = relevadoA[h.ts];
     const tReal = Math.max(0, ...conv.filter((m) => !m.privJ && !/^\s*💬\s*\*?[^*\n]+?\*?\s+contestó por privado/.test(String(m.texto || ""))).map((m) => tsMs(m.ts)));
     const privSinLeer = /^\s*💬\s*\*?[^*\n]+?\*?\s+contestó por privado/.test(String(ult.texto || ""));

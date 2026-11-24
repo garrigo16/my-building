@@ -79,6 +79,8 @@ process.stdout.write(JSON.stringify({prompt:{text},name:"slack "+Date.now(),
 
 CCFG=$(umask 077; mktemp -p "$TMP"); printf 'user = "%s:"\n' "$CURSOR_API_KEY" > "$CCFG"
 API=https://api.cursor.com/v1/agents
+# el host es fijo: CURSOR_API_URL solo vale en pruebas (CANAL_PRUEBAS=1), como en lanzar-cursor.sh y cursor-agente.js
+if [ "${CANAL_PRUEBAS:-0}" = 1 ] && [ -n "${CURSOR_API_URL:-}" ]; then API=$CURSOR_API_URL; fi
 RUN0=""; REUSO=$(CURSOR_API_KEY="$CURSOR_API_KEY" node "$AQUI/cursor-agente.js" reusa "slack:$HILO" "$TMP/body.json" 2>/dev/null) || REUSO=""
 if [ -n "$REUSO" ]; then
   ID=${REUSO%%$'\t'*}; RUN0=${REUSO#*$'\t'}; CODE=200; JSON="{\"agent\":{\"id\":\"$ID\"}}"
@@ -92,9 +94,16 @@ fi
 done
 ID=$(JSON="$JSON" node -e 'try{const j=JSON.parse(process.env.JSON);process.stdout.write((j.agent&&j.agent.id)||j.id||"")}catch(x){}')
 if [ "${CODE:0:1}" != "2" ] || [ -z "$ID" ]; then
-  echo "Cursor NO lanzado: http ${CODE:-?} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-200)"
-  echo "$(date -Is) NO hilo $HILO http ${CODE:-?} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-160)" >> "$HOME/.canal-logs/cursor-arranques.log"
-  responder "*Cursor no ha arrancado (la API no responde, http ${CODE:-?}, 3 intentos).* Si corre prisa, menciónalo a mano en su app."
+  # http 400 con error.code usage_limit_exceeded = Cursor sin saldo de API (no es que la API no responda; no se reintenta)
+  SIN_SALDO=""
+  [ "$CODE" = 400 ] && SIN_SALDO=$(JSON="$JSON" node -e 'const s=process.env.JSON;let c="";try{const j=JSON.parse(s);c=(j.error&&j.error.code)||j.code||""}catch(x){const m=s.match(/"code"\s*:\s*"([^"]+)"/);c=m?m[1]:""}process.stdout.write(c==="usage_limit_exceeded"?"1":"")')
+  echo "Cursor NO lanzado: http ${CODE:-?}${SIN_SALDO:+ sin saldo de API} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-200)"
+  echo "$(date -Is) NO hilo $HILO http ${CODE:-?}${SIN_SALDO:+ sin saldo de API (usage_limit_exceeded)} $(printf '%s' "$JSON" | tr -d '\n' | cut -c1-160)" >> "$HOME/.canal-logs/cursor-arranques.log"
+  if [ -n "$SIN_SALDO" ]; then
+    responder "*Cursor sin saldo de API: recarga en tu facturación de Cursor.* Si corre prisa, menciónalo a mano en su app."
+  else
+    responder "*Cursor no ha arrancado (la API no responde, http ${CODE:-?}, 3 intentos).* Si corre prisa, menciónalo a mano en su app."
+  fi
   exit 10
 fi
 echo "$(date -Is) SI hilo $HILO agente $ID${REUSO:+ (follow-up)}" >> "$HOME/.canal-logs/cursor-arranques.log"
