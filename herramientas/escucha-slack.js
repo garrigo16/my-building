@@ -140,7 +140,24 @@ async function conectar() {
       if (normal && haceIA(txtM, "cursor")) { lanzar(e, "atender-cursor-slack.sh", "Coo", txt); a += " Cursor"; }
       if (normal && haceIA(txtM, "claude")) { lanzar(e, "atender-slack.sh", "Coo", txt); a += " Claude"; }
       if (e.type === "message") log(`mensaje de Coo (${cooBot ? "bot del Edificio" : "prefijo «Coo:»"}) en ${e.channel} (${e.ts}): ${a ? "despierto a" + a : "no despierta a nadie"}`);
+      hilosDeCoo.set(hilo, Date.now());   // Coo ha escrito en este hilo: una respuesta de Humano ahí le llega a Coo
       return;
+    }
+    // Humano habla a Coo: lo despierta por webhook. Antibucle: nunca por un mensaje de bot, del usuario del bot del Edificio
+    // (que también publica cosas que no son de Coo) ni que empiece por «Coo:».
+    const deBot = !!e.bot_id || e.user === COO || e.subtype === "bot_message" || /^\s*Coo:/.test(txt);
+    if (e.type === "message" && normal && !deBot && !e.app_id && e.user === c.SLACK_HUMANO_ID && !vistos.has(`coo:h:${e.channel}:${e.ts}`)) {
+      const nombra = llamaACoo || /\bgeoffrey\b/i.test(txt);
+      const avisa = () => {
+        if (vistos.has(`coo:h:${e.channel}:${e.ts}`)) return; vistos.add(`coo:h:${e.channel}:${e.ts}`);
+        log(`Humano habla a Coo en ${e.channel} (${e.ts}): aviso a Coo por webhook`);
+        spawn(BASH, [path.join(AQUI, "avisar-coo.sh"), e.channel, hilo, "Humano", e.ts], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+        toqueOficina({ hilo, ia: "Coo" });
+      };
+      if (nombra) avisa();
+      else if (e.thread_ts) {
+        hiloConCoo(c, e).then((si) => { if (si) avisa(); }).catch((x) => log(`no he podido mirar el hilo ${e.thread_ts} para ver si hay Coo: ${x.message}`));
+      }
     }
     if (false && (e.user === YO || e.user === CURSOR) && normal && llamaACoo
         && !txt.includes(`<@${c.SLACK_HUMANO_ID}>`) && !vistos.has(`coo:${e.ts}`)) {
@@ -254,6 +271,19 @@ const NOMBRE_COO_BOT = "Coo · Geoffrey";
 function esCooBot(m) {
   return !!m && (m.username === NOMBRE_COO_BOT || (m.bot_profile && m.bot_profile.name) === NOMBRE_COO_BOT
     || (!!(m.bot_id || m.app_id) && /^\s*Coo:/.test(String(m.text || ""))));
+}
+// ¿ha escrito Coo (esCooBot o «Coo:», nunca solo por user) en el hilo? Primero lo visto en vivo; si no, se consulta una vez y se cachea.
+const hilosDeCoo = new Map(), hilosSinCoo = new Map();
+async function hiloConCoo(c, e) {
+  const h = e.thread_ts;
+  if (hilosDeCoo.has(h)) return true;
+  if (Date.now() - (hilosSinCoo.get(h) || 0) < 60000 || !c.SLACK_BOT_TOKEN) return false;
+  hilosSinCoo.set(h, Date.now());
+  const r = await fetch("https://slack.com/api/conversations.replies?" + new URLSearchParams({ channel: e.channel, ts: h, limit: "200" }), { headers: { Authorization: "Bearer " + c.SLACK_BOT_TOKEN } });
+  const j = await r.json(); if (!j.ok) throw new Error(j.error);
+  const si = (j.messages || []).some((m) => esCooBot(m) || /^\s*Coo:/.test(String(m.text || "")));
+  if (si) hilosDeCoo.set(h, Date.now());
+  return si;
 }
 function esOkCorto(t) { return require(path.join(AQUI, "regla-ok.js")).esOk(t); }
 function haceIA(t, ia) {
