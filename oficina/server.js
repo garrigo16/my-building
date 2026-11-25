@@ -1834,6 +1834,26 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     }
     const obj0 = objetivoDe(raiz.texto);
     const origen0 = (((raiz.texto || "").match(/(?:(?:📥|:inbox_tray:)\s*|^[ \t>*_]*)Origen:\**\s*([^\n·*]+)/m) || [])[1] || "").trim();
+    let pendExterno = false;
+    const esJiraNuevo = /🆕\s*Nuevo de Jira/i.test(raiz.texto || "") && /^Jira/i.test(origen0);
+  const claveJn = claveJira(tituloHilo(raiz.texto));
+  const salJn = claveJn && typeof jiraSalidas === "object" && jiraSalidas && jiraSalidas[claveJn];
+  if (esJiraNuevo && salJn) {
+    if (salJn.m === "done") { estado = "cerrado"; pendExterno = false; motivo = "contestado en Jira"; }
+    else if (salJn.m === "reasignado") { estado = "cerrado"; pendExterno = false; motivo = "reasignado en Jira"; }
+    else if (salJn.m === "indeterminate" || (salJn.m === "humano" && !enMarcha.length && !conv.some((m) => tsMs(m.ts) > tsMs(raiz.ts) && IAS.includes(m.quien)))) { estado = "humano"; pendExterno = true; motivo = `📥 nuevo de Jira: ${(obj0 || "").slice(0, 120)}${eraPara(raiz)}`; }
+  } else if (esJiraNuevo && !salJn) {
+    const convJn = conv.filter((m) => tsMs(m.ts) > tsMs(raiz.ts));
+    const humanoJn = convJn.some((m) => m.quien === "Humano");
+    const teTocaJn = convJn.some((m) => /\[te toca\]/i.test(m.texto || ""));
+    const venceJn = ahora - tsMs(raiz.ts) >= JIRA_HORAS_NUEVO();
+    const iaJn = enMarcha.length || convJn.some((m) => IAS.includes(m.quien));
+    if (humanoJn || teTocaJn || venceJn) {
+      estado = "humano"; pendExterno = true; motivo = `📥 nuevo de Jira: ${(obj0 || "").slice(0, 120)}${eraPara(raiz)}`;
+    } else if (!iaJn && !enMarcha.length) {
+      estado = "nuevo"; pendExterno = false; espera = []; motivo = `🆕 nuevo de Jira: ${(obj0 || tituloHilo(raiz.texto)).slice(0, 120)}`;
+    }
+  }
     if ((/^Relevo/i.test(origen0) || /Viene de:\s*<?https?:/i.test(raiz.texto || "")) && conv.length === 1 && !enMarcha.length && !/canal git/.test(motivo)) {
       const pr = textoPlano(raiz.texto);
       let pend = ((pr.match(/Pendiente:?\s*\**\s*\n?\s*(?:[•\-*]\s*)?([^\n•]{5,160})/i) || [])[1] || "").replace(/\s+/g, " ").trim();
@@ -1845,8 +1865,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
       else if (ahora - tUlt > 24 * 3600e3) { estado = "cerrado"; motivo = "🧵 hilo del relevo sin novedades en 24 h"; }
       else { estado = "espera_ia"; motivo = `🧵 sigue del relevo${pend ? `; pendiente: ${pend.slice(0, 120)}` : ""}`; }
     }
-    let pendExterno = false;
-    if (obj0 && conv.length === 1 && !(raiz.menc || []).some((x) => IAS.includes(x)) && !/@(claude|cursor|coo)\b/i.test(raiz.texto || "")) {
+    if (obj0 && conv.length === 1 && !(raiz.menc || []).some((x) => IAS.includes(x)) && !/@(claude|cursor|coo)\b/i.test(raiz.texto || "") && !esJiraNuevo) {
       estado = "espera_ia"; espera = []; motivo = "📌 tema abierto, sin IA asignada";
       const alTanto = (obj0.match(/\b(?:estar al tanto|estar atent[oa]|esperar)\s+(?:a\s+)?(?:de\s+)?(?:la\s+)?(?:respuesta|que\s+(?:conteste|responda))\s+(?:de\s+)?([A-ZÁÉÍÓÚÑ][\p{L}]+)/u) || [])[1];
       if (/^(Jira|Correo|Chat|Reuni)/i.test(origen0) && alTanto) {
@@ -1879,7 +1898,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
       const mc = conv.filter((m) => m.quien !== "Humano" && /Asunto:/i.test(m.texto || "") && tsMs(cand.ts) - tsMs(m.ts) < 24 * 3600e3).pop();
       if (mc) correoGrok = textoPlano(mc.texto).slice(0, 5000);
     }
-    if (estado === "cerrado" && /^(Jira|Correo|Chat|Reuni)/i.test(origen0) && !/^✔ cerrado en el hilo/.test(motivo)) {
+    if (estado === "cerrado" && /^(Jira|Correo|Chat|Reuni)/i.test(origen0) && !/^✔ cerrado en el hilo/.test(motivo) && !/^(contestado en Jira|reasignado en Jira)/.test(motivo)) {
       const clave = claveJira(tituloHilo(raiz.texto));
       const contestado = clave && ((typeof jiraContestados === "object" && jiraContestados && jiraContestados[clave]) || 0) > tsMs(h.ts);
       const CIERRA_J = /\b(cerramos|cierra|cerrad|cierro)\s+(el\s+|este\s+)?(tema|hilo)\b|\bda(lo)?\s+por\s+(cerrado|hecho|resuelto)\b|\b(este\s+)?(tema|hilo)\s+cerrado\b|\b(queda|est[aá]|lo doy por)\s+cerrado\b/i;
@@ -2080,7 +2099,8 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     const bJ = estado === "humano" ? delTema.filter((b) => b.t > tJTema && pideJ(b) && decideAqui(b)).sort((a, b) => a.t - b.t).pop() : null;
     const d8 = new Date(proximo805(ahora));
     let caja, cajaPor;
-    if (estado === "humano") { caja = "toca"; cajaPor = atascado ? `${atascado.ia} se ha atascado` : "depende de ti"; }
+    if (estado === "nuevo") { caja = "nuevo"; cajaPor = motivo; }
+    else if (estado === "humano") { caja = "toca"; cajaPor = atascado ? `${atascado.ia} se ha atascado` : "depende de ti"; }
     else if (enMarcha.length) { caja = "trabajando"; cajaPor = `${enMarcha.join(" y ")} trabajando`; }
     else if (despierta) { caja = "trabajando"; cajaPor = despierta.ya ? `despertado ${despierta.ia} a las ${hhmm(despierta.t)}; si en 15 min no dice nada, te lo traigo` : despierta.margen ? (diaA ? `hoy toca; si a las 10:10 no ha empezado, despierto a ${despierta.ia}` : ult.quien === "Humano" ? `avisando a ${despierta.ia}` : `${ultT > tUlt && ultQuien ? ultQuien : ult.quien} escribió a las ${hhmm(tRefD)}; si en 10 min no se mueve nadie, despierto a ${despierta.ia}`) : `despertando a ${despierta.ia} ahora`; }
     else if (estado === "espera_otro") { caja = "esperando"; cajaPor = esperaA ? (esperaA.proceso ? `al proceso «${esperaA.quien}» desde ${desdeCuando(esperaA.t, ahora)}` : `a ${esperaA.quien} desde ${desdeCuando(esperaA.t, ahora)}`)
@@ -2904,6 +2924,10 @@ function limpiaActividad(t) {
 function marcaArranque(hilo, ia, t = Date.now(), lanzador = ia !== "Coo") {
   if (!hilo || !["Claude", "Cursor", "Coo"].includes(ia)) return false;
   (arrancando[hilo] = arrancando[hilo] || {})[ia] = { ini: t, fin: 0, rc: 0, lanzador };
+  if (!PRUEBAS && estado && estado.hilos) {
+    const h = estado.hilos.find((x) => x.ts === hilo);
+    if (h) { const c = claveJira(h.titulo); if (c) try { const v = JSON.parse(fs.readFileSync(JIRA_F_REAL, "utf8")); jiraApuntaSalida(v, c, "humano", t, JIRA_F_REAL); } catch (e) {} }
+  }
   limpiaActividad(t); guardaActividad(); return true;
 }
 function marcaFin(hilo, ia, rc, t = Date.now()) {
@@ -3623,11 +3647,14 @@ function crearTema(req, res) {
 
 const JIRA_SITE = process.env.JIRA_SITE || CONF.jira.sitio;
 const JIRA_F_REAL = path.join(HOME, ".oficina", "jira-vistos.json");
-let jiraT = 0, jiraEnCurso = false;
+let jiraT = 0, jiraEnCurso = false, jiraSinTokenAviso = false;
+const JIRA_HORAS_NUEVO = () => +((CONF.jira && CONF.jira.horasNuevo) || 4) * 3600e3;
 // v116: clave de Jira -> cuándo comentaste tú en ella (o pasó a terminada). Lo usa analizar() para no cerrar el tema antes.
 var jiraContestados = (() => { try { return JSON.parse(fs.readFileSync(JIRA_F_REAL, "utf8")).contestados || {}; } catch (e) { return {}; } })();
 // v169: cuándo se creó cada incidencia vista (para fechar los temas con clave de Jira); viaja con el turno en jira-vistos.json
 var jiraCreadas = (() => { try { return JSON.parse(fs.readFileSync(JIRA_F_REAL, "utf8")).creadas || {}; } catch (e) { return {}; } })();
+// vNNN: salió de «Nuevo» por hilo (no vuelve a ese estado)
+var jiraSalidas = (() => { try { return JSON.parse(fs.readFileSync(JIRA_F_REAL, "utf8")).salidas || {}; } catch (e) { return {}; } })();
 // v322: con cfg() (antes, otra copia del lector de canal-slack.env)
 function jiraCred(o = cfg()) {
   return o.JIRA_EMAIL && o.JIRA_API_TOKEN ? "Basic " + Buffer.from(o.JIRA_EMAIL + ":" + o.JIRA_API_TOKEN).toString("base64") : null;
@@ -3641,83 +3668,228 @@ function adfTexto(n) {
   return /^(paragraph|heading|listItem|codeBlock|blockquote)$/.test(n.type) ? hijos + "\n" : hijos;
 }
 const adfMenciona = (n, id) => JSON.stringify(n || "").includes(id);
-async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred() } = {}) {
-  if (!auth) return;
-  const api = async (u, b) => { const r = await fetch(JIRA_SITE + u, { method: b ? "POST" : "GET", headers: { Authorization: auth, Accept: "application/json", ...(b ? { "Content-Type": "application/json" } : {}) }, body: b ? JSON.stringify(b) : undefined });
-    if (!r.ok) throw new Error("Jira " + r.status); return r.json(); };
-  let v; try { v = JSON.parse(fs.readFileSync(JIRA_F, "utf8")); } catch (e) { v = { desde: Date.now() - 3 * 3600e3, vistos: {}, asignadas: {} }; }
-  if (!v.yo) v.yo = (await api("/rest/api/3/myself")).accountId;
-  const yo = v.yo, desde = v.desde, ahora = Date.now();
-  const r = await api("/rest/api/3/search/jql", { jql: `(assignee = currentUser() OR text ~ "${yo}") AND updated >= -1d ORDER BY updated DESC`, maxResults: 40,
+const JIRA_CAMPOS_NUEVO = ["summary", "status", "issuetype", "priority", "reporter", "creator", "created", "updated", "description", "assignee"];
+function jiraGuardaV(JIRA_F, v) {
+  const json = JSON.stringify(v);
+  if (json !== leer(JIRA_F)) { fs.mkdirSync(path.dirname(JIRA_F), { recursive: true }); fs.writeFileSync(JIRA_F + ".tmp", json); fs.renameSync(JIRA_F + ".tmp", JIRA_F); }
+}
+function jiraFmtCorte(corteMs, tz) {
+  const fmt = new Intl.DateTimeFormat("en-CA", { timeZone: tz || "Europe/Madrid", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  const p = Object.fromEntries(fmt.formatToParts(new Date(corteMs)).map((x) => [x.type, x.value]));
+  return `${p.year}/${p.month}/${p.day} ${p.hour}:${p.minute}`;
+}
+function jiraDdMmHh(iso) {
+  const t = Date.parse(iso); if (!t) return "";
+  const d = new Date(t);
+  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+function jiraLimpio(x) {
+  return String(x || "").replace(/[<>]/g, "").replace(/\bclaude\b/gi, (m) => m.slice(0, 2) + "​" + m.slice(2)).trim();
+}
+function jiraPruneNuevos(v, ahora) {
+  v.nuevos = v.nuevos || {};
+  const min = 180 * 86400e3, max = 2000;
+  const ent = Object.entries(v.nuevos);
+  const rec = ent.filter(([, x]) => (x.ts || x.t || 0) >= ahora - min);
+  const vie = ent.filter(([, x]) => (x.ts || x.t || 0) < ahora - min).sort((a, b) => (b[1].ts || b[1].t || 0) - (a[1].ts || a[1].t || 0));
+  v.nuevos = Object.fromEntries([...rec, ...vie.slice(0, Math.max(0, max - rec.length))]);
+}
+async function jiraReasignTrasCorte(api, key, yo, corte) {
+  let startAt = 0;
+  for (let pag = 0; pag < 6; pag++) {
+    const ch = await api(`/rest/api/3/issue/${encodeURIComponent(key)}/changelog?startAt=${startAt}&maxResults=100`);
+    for (const h of (ch && ch.values) || []) {
+      const t = Date.parse(h.created); if (!t || t <= corte) continue;
+      for (const it of h.items || []) {
+        if (it.field === "assignee" && (it.to === yo || String(it.toString || "").includes(yo))) return true;
+      }
+    }
+    if (!ch || ch.isLast || !ch.total) break;
+    startAt += (ch.values || []).length;
+  }
+  return false;
+}
+function jiraTitulo(key, sum) {
+  const s = sum || "";
+  return `${key} · ${s.length > 72 ? s.slice(0, 72).replace(/\s+\S*$/, "") + "…" : s}`;
+}
+function jiraTextoNuevo(i, site) {
+  const f = i.fields, key = i.key, sum = f.summary || "";
+  const tit = jiraTitulo(key, sum);
+  const inform = (f.reporter || f.creator || {}).displayName || "Jira";
+  const tipo = (f.issuetype && f.issuetype.name) || "?";
+  const prio = (f.priority && f.priority.name) || "?";
+  const est = (f.status && f.status.name) || "?";
+  const desc = jiraLimpio(require(path.join(__dirname, "..", "herramientas", "tapar-secretos.js")).tapaSecretos(adfTexto(f.description).slice(0, 1200), { largos: false }));
+  const lineas = [`*Hilo: ${jiraLimpio(tit)}*`, `🎯 Objetivo: revisar el ticket nuevo ${key} de Jira`, `📥 Origen: Jira · ${jiraLimpio(inform)}`,
+    `🆕 Nuevo de Jira`, `Tipo: ${jiraLimpio(tipo)} · Prioridad: ${jiraLimpio(prio)} · Estado: ${jiraLimpio(est)} · Creado: ${jiraDdMmHh(f.created)}`,
+    "", desc, `🔗 ${site}/browse/${key}`];
+  return lineas.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+function jiraClaveEnHilos(hilos, key) {
+  return (hilos || []).some((h) => claveJira(h.titulo) === key);
+}
+function jiraApuntaSalida(v, clave, m, t, JIRA_F) {
+  if (!clave) return;
+  v.salidas = v.salidas || {};
+  if (v.salidas[clave]) return;
+  v.salidas[clave] = { t, m };
+  jiraSalidas = v.salidas;
+  jiraGuardaV(JIRA_F, v);
+}
+async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: site = JIRA_SITE, fetch: fetchFn = fetch, api, publicar, ahora: ahoraFn, token, hilos: hilosIn, conTurno: conTurnoFn = conTurno } = {}) {
+  if (!auth) {
+    if (!jiraSinTokenAviso) { jiraSinTokenAviso = true; errores.jira = "Jira sin token: no se crean temas Nuevo"; }
+    return 0;
+  }
+  jiraSinTokenAviso = false;
+  const ahora = (ahoraFn || Date.now)();
+  const hilos = hilosIn || (estado && estado.hilos) || [];
+  const apiReal = api || (async (u, b) => {
+    const r = await fetchFn(site + u, { method: b ? "POST" : "GET", headers: { Authorization: auth, Accept: "application/json", ...(b ? { "Content-Type": "application/json" } : {}) }, body: b ? JSON.stringify(b) : undefined });
+    if (r.status === 401 || r.status === 403) throw new Error("Jira " + r.status);
+    if (!r.ok) throw new Error("Jira " + r.status);
+    return r.json();
+  });
+  const publicarFn = publicar || (async (texto) => {
+    const tok = token !== undefined ? token : tokenHumano();
+    if (!tok) return { ok: false, error: "sin token humano" };
+    return slackPost({ channel: CH, text: texto }, tok);
+  });
+  let v; try { v = JSON.parse(fs.readFileSync(JIRA_F, "utf8")); } catch (e) { v = { desde: ahora - 3 * 3600e3, vistos: {}, asignadas: {} }; }
+  let yo = v.yo, tz = v.tz;
+  if (!yo || !tz) {
+    const me = await apiReal("/rest/api/3/myself");
+    yo = v.yo = me.accountId; tz = v.tz = me.timeZone || "Europe/Madrid";
+  }
+  if (!v.corteNuevo) {
+    v.corteNuevo = ahora;
+    jiraGuardaV(JIRA_F, v);
+    anota(`JIRA: corte fijado ${new Date(v.corteNuevo).toISOString()}`);
+    return 0;
+  }
+  const corteNuevo = v.corteNuevo, desde = v.desde;
+  const r = await apiReal("/rest/api/3/search/jql", { jql: `(assignee = currentUser() OR text ~ "${yo}") AND updated >= -1d ORDER BY updated DESC`, maxResults: 40,
     fields: ["summary", "status", "assignee", "reporter", "creator", "created", "description", "comment", "issuetype"] });
-  const nuevos = [];
+  const nuevos = [], clavesAsignC = new Set();
   for (const i of r.issues || []) {
-    const f = i.fields, url = `${JIRA_SITE}/browse/${i.key}`, sum = f.summary || "";
-    const tit = `${i.key} · ${sum.length > 72 ? sum.slice(0, 72).replace(/\s+\S*$/, "") + "…" : sum}`;
+    const f = i.fields, url = `${site}/browse/${i.key}`, sum = f.summary || "";
+    const tit = jiraTitulo(i.key, sum);
     const creada = Date.parse(f.created), creador = (f.creator || f.reporter || {});
-    if (creada) (v.creadas = v.creadas || {})[i.key] = creada;   // v169: inicio real de los temas con su clave (temaDesde)
-    // (a) mención en la descripción de una incidencia nueva que no es tuya
+    if (creada) (v.creadas = v.creadas || {})[i.key] = creada;
     if (creada > desde && creador.accountId !== yo && adfMenciona(f.description, yo) && !v.vistos[i.key + "#d"])
       nuevos.push({ id: i.key + "#d", tit, quien: creador.displayName, texto: adfTexto(f.description), url, tipo: "te menciona" });
-    // (a) menciones en comentarios nuevos de otras personas
     for (const c of (f.comment && f.comment.comments) || []) {
       const cid = i.key + "#c" + c.id;
       if (Date.parse(c.created) > desde && c.author && c.author.accountId !== yo && adfMenciona(c.body, yo) && !v.vistos[cid])
         nuevos.push({ id: cid, tit, quien: c.author.displayName, texto: adfTexto(c.body), url: `${url}?focusedCommentId=${c.id}`, tipo: "te menciona en un comentario" });
     }
-    // (b) asignada a ti ahora y antes no (y no la creaste tú)
     const mia = f.assignee && f.assignee.accountId === yo;
-    if (mia && v.base && !v.asignadas[i.key] && creador.accountId !== yo && Date.parse(f.updated || f.created || 0) > desde)
+    if (mia && v.base && !v.corteNuevo && !v.asignadas[i.key] && creador.accountId !== yo && Date.parse(f.updated || f.created || 0) > desde)
       nuevos.push({ id: i.key + "#a" + ahora, tit, quien: creador.displayName, texto: adfTexto(f.description).slice(0, 600), url, tipo: "te la han asignado", estado: f.status && f.status.name });
     if (mia) v.asignadas[i.key] = v.asignadas[i.key] || ahora; else delete v.asignadas[i.key];
   }
-  for (const n of nuevos.slice(0, 5)) {   // como mucho 5 temas por vuelta (si algo se tuerce, no inunda el canal)
-    const limpio = (x) => String(x || "").replace(/[<>]/g, "").replace(/\bclaude\b/gi, (m) => m.slice(0, 2) + "​" + m.slice(2)).trim();
-    const lineas = [`*Hilo: ${limpio(n.tit)}*`, `🎯 Objetivo: contestar o atender lo que pide ${limpio(n.quien)} en Jira (${n.tipo})`,
-      `📥 Origen: Jira · ${limpio(n.quien)}`, "", limpio(n.texto).slice(0, 1800), "", `🔗 ${n.url}${n.estado ? " · estado: " + n.estado : ""}`];
-    const texto = lineas.join("\n").replace(/\n{3,}/g, "\n\n");
-    if (process.env.JIRA_PRUEBA) { anota(`JIRA (prueba, no publico) ${n.id}:\n${texto}`); v.vistos[n.id] = ahora; continue; }
-    const tok = tokenHumano(); if (!tok) { anota("JIRA: falta el token de la oficina; no publico"); break; }
-    const k = await slackPost({ channel: CH, text: texto }, tok);
-    anota(`JIRA tema «${n.tit}» (${n.tipo}) ${k.ok ? "ok " + k.ts : "error " + k.error}`);
-    if (k.ok) v.vistos[n.id] = ahora;
+  const corteStr = jiraFmtCorte(corteNuevo, tz);
+  let jqlN = `assignee = currentUser() AND statusCategory = "To Do" AND (created >= "${corteStr}" OR assignee CHANGED TO currentUser() AFTER "${corteStr}") ORDER BY created ASC`;
+  let issuesN = [];
+  try {
+    let nextPage;
+    do {
+      const b = { jql: jqlN, maxResults: 50, fields: JIRA_CAMPOS_NUEVO }; if (nextPage) b.nextPageToken = nextPage;
+      const rc = await apiReal("/rest/api/3/search/jql", b);
+      issuesN.push(...(rc.issues || [])); nextPage = rc.nextPageToken;
+    } while (nextPage && issuesN.length < 50);
+  } catch (e) {
+    if (/400/.test(String(e.message))) {
+      jqlN = `assignee = currentUser() AND statusCategory = "To Do" AND created >= "${corteStr}" ORDER BY created ASC`;
+      anota("JIRA: JQL sin CHANGED (400), solo created >= corte");
+      const rc = await apiReal("/rest/api/3/search/jql", { jql: jqlN, maxResults: 50, fields: JIRA_CAMPOS_NUEVO });
+      issuesN = rc.issues || [];
+    } else throw e;
   }
-  for (const n of nuevos.slice(5)) v.vistos[n.id] = ahora;
-  const claves = [...new Set(((estado && estado.hilos) || []).filter((x) => /en Jira/.test(x.objetivo || "") || /^Jira\b/i.test(x.origen || ""))
+  v.nuevos = v.nuevos || {};
+  for (const i of issuesN) {
+    const f = i.fields, key = i.key;
+    const cat = f.status && f.status.statusCategory && f.status.statusCategory.key;
+    if (cat !== "new") continue;
+    if (!f.assignee || f.assignee.accountId !== yo) continue;
+    const creada = Date.parse(f.created) || 0;
+    let ok = creada >= corteNuevo;
+    if (!ok && creada < corteNuevo) ok = await jiraReasignTrasCorte(apiReal, key, yo, corteNuevo);
+    if (!ok) continue;
+    if (v.nuevos[key] || clavesAsignC.has(key) || jiraClaveEnHilos(hilos, key)) continue;
+    clavesAsignC.add(key);
+    nuevos.push({ id: key + "#n", key, texto: jiraTextoNuevo(i, site), tit: jiraTitulo(key, f.summary), tipo: "nuevo de Jira" });
+  }
+  for (const n of nuevos.filter((x) => x.tipo === "te la han asignado" && clavesAsignC.has((x.id || "").split("#")[0]))) {
+    const ix = nuevos.indexOf(n); if (ix >= 0) nuevos.splice(ix, 1);
+  }
+  let publicados = 0;
+  for (const n of nuevos) {
+    if (publicados >= 5) { if (n.id) v.vistos[n.id] = ahora; continue; }
+    if (n.tipo !== "nuevo de Jira") {
+      const limpio = jiraLimpio;
+      const lineas = [`*Hilo: ${limpio(n.tit)}*`, `🎯 Objetivo: contestar o atender lo que pide ${limpio(n.quien)} en Jira (${n.tipo})`,
+        `📥 Origen: Jira · ${limpio(n.quien)}`, "", limpio(n.texto).slice(0, 1800), "", `🔗 ${n.url}${n.estado ? " · estado: " + n.estado : ""}`];
+      n.texto = lineas.join("\n").replace(/\n{3,}/g, "\n\n");
+    }
+    if (process.env.JIRA_PRUEBA) { anota(`JIRA (prueba, no publico) ${n.id}:\n${n.texto}`); v.vistos[n.id] = ahora; if (n.key) v.nuevos[n.key] = { t: ahora, ts: ahora }; publicados++; continue; }
+    if (!conTurnoFn()) break;
+    const k = await publicarFn(n.texto);
+    if (k.ok) {
+      anota(`JIRA tema «${n.tit || n.key}» (${n.tipo}) ok`);
+      v.vistos[n.id] = ahora;
+      if (n.key) { v.nuevos[n.key] = { t: ahora, ts: ahora }; jiraGuardaV(JIRA_F, v); }
+      publicados++;
+    } else {
+      anota(`JIRA: no publico ${n.id}: ${k.error || "error"}`);
+      if (/token/.test(String(k.error))) break;
+    }
+  }
+  const claves = [...new Set(hilos.filter((x) => /🆕\s*Nuevo de Jira/i.test((x.msgs && x.msgs[0] && x.msgs[0].texto) || "") || /en Jira/.test(x.objetivo || "") || /^Jira\b/i.test(x.origen || ""))
     .map((x) => claveJira(x.titulo)).filter(Boolean))].slice(0, 40);
   v.contestados = v.contestados || {};
+  v.salidas = JIRA_F === JIRA_F_REAL ? { ...(jiraSalidas || {}), ...(v.salidas || {}) } : (v.salidas || {});
   if (claves.length) {
-    const rc = await api("/rest/api/3/search/jql", { jql: `key in (${claves.join(",")})`, maxResults: 50, fields: ["comment", "status"] });
+    const rc = await apiReal("/rest/api/3/search/jql", { jql: `key in (${claves.join(",")})`, maxResults: 50, fields: ["comment", "status", "assignee"] });
     for (const i of rc.issues || []) {
-      const mios = ((i.fields.comment && i.fields.comment.comments) || []).filter((c) => c.author && c.author.accountId === yo).map((c) => Date.parse(c.created));
-      const fin = i.fields.status && i.fields.status.statusCategory && i.fields.status.statusCategory.key === "done";
+      const f = i.fields;
+      const mios = ((f.comment && f.comment.comments) || []).filter((c) => c.author && c.author.accountId === yo).map((c) => Date.parse(c.created));
+      const fin = f.status && f.status.statusCategory && f.status.statusCategory.key === "done";
       const t = Math.max(0, ...mios, fin ? ahora : 0);
       if (t) v.contestados[i.key] = Math.max(v.contestados[i.key] || 0, fin ? Math.min(t, v.contestados[i.key] || t) : t);
+      const cat = f.status && f.status.statusCategory && f.status.statusCategory.key;
+      if (fin || (cat === "done")) jiraApuntaSalida(v, i.key, "done", ahora, JIRA_F);
+      else if (f.assignee && f.assignee.accountId !== yo) jiraApuntaSalida(v, i.key, "reasignado", ahora, JIRA_F);
+      else if (cat === "indeterminate") jiraApuntaSalida(v, i.key, "indeterminate", ahora, JIRA_F);
     }
   }
   jiraContestados = v.contestados;
-  // v170: la fecha de creación de las incidencias que dan título a un tema y que la consulta no ha traído (solo lectura,
-  // como mucho 5 por vuelta; si no existe o no se puede leer, se apunta -1 y no se vuelve a pedir)
-  const sinFecha = [...new Set((estado.hilos || []).flatMap((h) => String(h.titulo || "").match(/\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b/g) || []))].filter((k) => !(v.creadas || {})[k]).slice(0, 5);
+  jiraSalidas = v.salidas;
+  const sinFecha = [...new Set(hilos.flatMap((h) => String(h.titulo || "").match(/\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b/g) || []))].filter((k) => !(v.creadas || {})[k]).slice(0, 5);
   for (const k of sinFecha) {
-    let t = -1; try { const r = await api(`/rest/api/3/issue/${encodeURIComponent(k)}?fields=created`); t = Date.parse(r && r.fields && r.fields.created) || -1; } catch (e) {}
+    let t = -1; try { const ri = await apiReal(`/rest/api/3/issue/${encodeURIComponent(k)}?fields=created`); t = Date.parse(ri && ri.fields && ri.fields.created) || -1; } catch (e) {}
     (v.creadas = v.creadas || {})[k] = t;
   }
-  jiraCreadas = v.creadas || {};   // v169
-  { const ks = Object.keys(v.creadas || {}); if (ks.length > 400) for (const k2 of ks.slice(0, ks.length - 400)) delete v.creadas[k2]; }   // no crece sin fin
+  jiraCreadas = v.creadas || {};
+  { const ks = Object.keys(v.creadas || {}); if (ks.length > 400) for (const k2 of ks.slice(0, ks.length - 400)) delete v.creadas[k2]; }
   for (const [k2, t] of Object.entries(v.vistos)) if (t < ahora - 14 * 86400e3) delete v.vistos[k2];
+  jiraPruneNuevos(v, ahora);
   v.base = true;
   v.desde = Math.max(desde, Math.floor((ahora - 2 * 86400e3) / 3600e3) * 3600e3);
-  const json = JSON.stringify(v);
-  if (json !== leer(JIRA_F)) { fs.mkdirSync(path.dirname(JIRA_F), { recursive: true }); fs.writeFileSync(JIRA_F + ".tmp", json); fs.renameSync(JIRA_F + ".tmp", JIRA_F); }
-  if (nuevos.length && !PRUEBAS) setTimeout(() => { tic(true).catch(() => {}); }, 1500);   // v320: en las pruebas, sin refresco de verdad
-  return nuevos.length;
+  jiraGuardaV(JIRA_F, v);
+  if (nuevos.length && !PRUEBAS) setTimeout(() => { tic(true).catch(() => {}); }, 1500);
+  return publicados;
 }
 function quizaJira() {
-  if (!conTurno()) return;   // v167: solo el equipo con el turno abre temas de Jira (si no, salen duplicados)
+  if (!conTurno()) return;
   if (jiraEnCurso || Date.now() - jiraT < 5 * MIN) return;
   jiraEnCurso = true; jiraT = Date.now();
-  jiraVigia().then(() => { delete errores.jira; }).catch((e) => { errores.jira = limpiaErr(e.message); }).finally(() => { jiraEnCurso = false; });
+  jiraVigia().then(() => { if (!jiraSinTokenAviso) delete errores.jira; }).catch((e) => {
+    const m = limpiaErr(e.message);
+  if (/Jira 401|Jira 403/.test(m)) errores.jira = "Jira sin token: no se crean temas Nuevo (" + m + ")";
+    else errores.jira = m;
+  }).finally(() => { jiraEnCurso = false; });
 }
 alAbrir(() => { setInterval(quizaJira, MIN); setTimeout(quizaJira, 20e3); });
 
@@ -4027,4 +4199,4 @@ if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Dat
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
 if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
-  COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; } };
+  COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; }, setJiraSalidas: (o) => { jiraSalidas = o || {}; }, adfTexto, jiraFmtCorte, jiraTextoNuevo, claveJira, objetivoDe, tituloHilo, verErroresJira: () => errores.jira, resetJiraSinToken: () => { jiraSinTokenAviso = false; delete errores.jira; } };

@@ -30,7 +30,7 @@ const EJEMPLO = {
       { nombre: "proyecto", rama: "canal/proyecto/compartido", fichero: "CANAL_PROYECTO.md" },
     ],
   },
-  jira: { sitio: "https://ocaglobal.atlassian.net" },
+  jira: { sitio: "https://ocaglobal.atlassian.net", horasNuevo: 4 },
   codex: { activo: false, modelo: "" },   // Codex como IA del canal git (herramientas/lanzar-codex.sh)
 };
 
