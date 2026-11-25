@@ -31,9 +31,9 @@ fi
 cd "$WT"
 git diff --quiet && git diff --cached --quiet || { echo "worktree $WT sucio; no publico" >&2; exit 3; }
 
-traer() { timeout 90 git -c gc.auto=0 fetch -q origin "+refs/heads/$RAMA:refs/remotes/origin/$RAMA" || true; }
+traer() { timeout 90 git -c gc.auto=0 fetch -q origin "+refs/heads/$RAMA:refs/remotes/origin/$RAMA"; }
 
-traer
+traer || { echo "NO publicado: fallo el fetch de origin/$RAMA" >&2; exit 5; }
 VISTO=$(git rev-parse "origin/$RAMA")
 # Lo último que esta IA leyó del canal (fichero de estado o LEIDO=<sha>). Si origin avanzó desde
 # entonces, se para ANTES de publicar: el fetch de arriba no basta, lo que entró entre la última
@@ -46,8 +46,12 @@ if [ -n "$LEIDO" ] && [ "$LEIDO" != "$VISTO" ] && [ "${REAPLICAR_SIN_LEER:-0}" !
   git log --format='  %h %cd %s' --date=format:%H:%M "$LEIDO..origin/$RAMA" >&2 || true
   echo "$VISTO" > "$ESTADO"; exit 6
 fi
+# Avanza al origin solo si es fast-forward: nunca force ni checkout sobre commits divergentes.
+avanzar_ff() {
+  FFERR=$(git merge --ff-only "origin/$RAMA" 2>&1) || { echo "NO publicado: no es fast-forward hacia origin/$RAMA: $FFERR" >&2; return 1; }
+}
+avanzar_ff || exit 3
 for intento in $(seq 1 "$MAX"); do
-  git checkout -q --detach "refs/remotes/origin/$RAMA"
   DESDE=$(git rev-parse HEAD)   # tip remoto sobre el que va este bloque: el "Desde:" de la nota
   ANEXOS=()
   for par in "$@"; do
@@ -114,15 +118,17 @@ for intento in $(seq 1 "$MAX"); do
   fi
   # el motivo del rechazo (hook del servidor, permisos, rama protegida) se enseña: antes se tiraba a /dev/null
   [ -z "$PUSHERR" ] || echo "git push dijo: $(printf %s "$PUSHERR" | tr -d '\015' | head -5)" >&2
-  traer
+  git reset -q --hard "$DESDE"
+  traer || { echo "NO publicado: fallo el fetch de origin/$RAMA" >&2; exit 5; }
   NUEVOS=$(git log --format='  %h %cd %s' --date=format:%H:%M "$VISTO..origin/$RAMA" || true)
   # Si entró algo de otra IA, se PARA: la norma es leerlo antes de publicar (no reaplicar a ciegas).
   if [ -n "$NUEVOS" ] && [ "${REAPLICAR_SIN_LEER:-0}" != 1 ]; then
     echo "NO publicado: alguien publicó antes. Lee esto y vuelve a lanzar el mismo comando:" >&2
     echo "$NUEVOS" >&2
-    git checkout -q --detach "refs/remotes/origin/$RAMA"; exit 6
+    avanzar_ff || true; exit 6
   fi
   echo "push fallido sin commits nuevos (intento $intento); reintento" >&2
+  avanzar_ff || exit 3
   VISTO=$(git rev-parse "origin/$RAMA")
 done
 echo "NO publicado tras $MAX intentos" >&2; exit 5
