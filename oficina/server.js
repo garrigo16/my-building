@@ -4230,6 +4230,23 @@ function cooPublicarRuta(req, res, dep = {}) {
   });
 }
 
+// El túnel HTTPS de Coo (herramientas/tunel-coo.js) deja su URL vigente en ~/.canal-logs/coo-tunel.json: se enseña en /api/estado
+// (tunelCoo), solo con estos campos (el fichero no lleva secretos, pero por si acaso no se copia nada más). null si no hay túnel.
+const TUNEL_COO_F = path.join(LOGS, "coo-tunel.json");
+const tunelCache = { f: "", marca: "", v: null };
+function tunelCoo(f = TUNEL_COO_F) {
+  let st; try { st = fs.statSync(f); } catch (e) { return null; }
+  const marca = st.mtimeMs + ":" + st.size;
+  if (tunelCache.f === f && tunelCache.marca === marca) return tunelCache.v;
+  let v = null;
+  try { const j = JSON.parse(fs.readFileSync(f, "utf8"));
+    v = { ok: !!j.ok, modo: String(j.modo || ""), baseUrl: String(j.baseUrl || ""), url: String(j.url || ""), puertoPasarela: +j.puertoPasarela || 0, actualizadoEn: String(j.actualizadoEn || "") };
+  } catch (e) { v = null; }
+  Object.assign(tunelCache, { f, marca, v });
+  return v;
+}
+const estadoConTunel = (est, f) => ({ ...est, tunelCoo: tunelCoo(f) });
+
 const servidor = PRUEBAS ? null : http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/relevo") return relevoRuta(req, res);   // v566: la oficina nueva pide el puerto
   // v566: en el relevo (la que se va) y con el estado heredado (la que llega, hasta su primera vuelta) no se envía nada: unos segundos
@@ -4256,7 +4273,7 @@ const servidor = PRUEBAS ? null : http.createServer((req, res) => {
     // v186: alguien mira la oficina: vuelve al ritmo de 15 s y, si venía del ritmo lento, refresca ya
     const dormida = Date.now() - ultimaVista > 3 * MIN; ultimaVista = Date.now(); if (dormida) { tic(true).catch(() => {}); miraInforme(); }
     let ver = 0; try { ver = fs.statSync(path.join(__dirname, "public", "index.html")).mtimeMs; } catch (e) {}
-    const c = cuerpoEstado(estado, ver, req.headers["accept-encoding"]);   // v505
+    const c = cuerpoEstado(estadoConTunel(estado), ver, req.headers["accept-encoding"]);   // v505 (+ tunelCoo)
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...(c.gzip ? { "Content-Encoding": "gzip", Vary: "Accept-Encoding" } : {}) });
     return res.end(c.buf);
   }
@@ -4299,6 +4316,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { tunelCoo, estadoConTunel, sirveEstatico,textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; }, setJiraSalidas: (o) => { jiraSalidas = o || {}; }, adfTexto, jiraFmtCorte, jiraTextoNuevo, claveJira, objetivoDe, tituloHilo, verErroresJira: () => errores.jira, resetJiraSinToken: () => { jiraSinTokenAviso = false; delete errores.jira; } };

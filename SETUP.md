@@ -72,6 +72,19 @@ Hay dos niveles. Empieza por **A**; **B** solo cuando A funcione.
     - http://127.0.0.1:4317 responde. Escribe en tu canal «@Claude hola»: debe contestarte en el hilo.
 11. **Coo** (opcional): es una rutina de Grok que se despierta por webhook (`GROK_WEBHOOK_URL`, `GROK_WEBHOOK_KEY`). Su
     instrucción genérica está en `prompts/COO.md`. Sin Coo, Claude y Cursor funcionan igual.
+    - **Túnel HTTPS para que Coo publique** (`POST /api/coo/publicar` con `Authorization: Bearer <COO_WEBHOOK_KEY>`): la tarea
+      «Canal IAs - tunel Coo» (`herramientas/tunel-coo.js`) arranca la pasarela `oficina/pasarela-coo.js` en `127.0.0.1:4392`
+      (solo esa ruta; todo lo demás, 404) y `cloudflared` hacia ella. La URL vigente queda en `~/.canal-logs/coo-tunel.json`
+      (y `coo-tunel-url.txt`) y en `GET http://127.0.0.1:4391/api/estado` → `tunelCoo.url`. Necesita `cloudflared` en el `PATH`
+      o en `%USERPROFILE%\.local\bin\cloudflared.exe`. La oficina arranca la tarea si no corre (`oficina-arranque.vbs`).
+    - Sin nada más es un *quick tunnel* (`https://<algo>.trycloudflare.com`): **la URL cambia** cada vez que se reinicia el túnel.
+    - **URL fija** (Cloudflare Named Tunnel; hace falta una cuenta de Cloudflare y un dominio con DNS en Cloudflare):
+      1. dash.cloudflare.com → Zero Trust → Networks → Tunnels → «Create a tunnel» (cloudflared), p. ej. `coo-edificio`.
+      2. En «Public Hostname»: `coo.<tu-dominio>` → Service `HTTP` → `127.0.0.1:4392` (la pasarela, **nunca** la oficina).
+      3. Copia el token del túnel a `canal-slack.env`: `CLOUDFLARE_TUNNEL_TOKEN=<token>` y `COO_TUNNEL_URL=https://coo.<tu-dominio>`.
+      4. `schtasks /end /tn "Canal IAs - tunel Coo"; schtasks /run /tn "Canal IAs - tunel Coo"` y comprueba `tunelCoo` (`modo: "fijo"`).
+      El token va a cloudflared por entorno (`TUNNEL_TOKEN`), nunca en la línea de órdenes. Alternativa: ngrok con dominio
+      estático (`ngrok http --url=<dominio>.ngrok-free.app 127.0.0.1:4392`), siempre hacia la pasarela.
 
 ## Dos equipos (casa y portátil)
 

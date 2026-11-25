@@ -44,7 +44,10 @@ $tr = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $tareas = @{
   'Canal IAs - escucha Slack' = @{ js = Join-Path $relevo 'herramientas\escucha-slack.js'; wd = Join-Path $relevo 'herramientas' }
   'Canal IAs - oficina'       = @{ js = Join-Path $relevo 'oficina\server.js';             wd = Join-Path $relevo 'oficina' }
+  # pasarela 127.0.0.1:4392 (solo POST /api/coo/publicar, con clave) + túnel HTTPS de cloudflared; la URL queda en ~/.canal-logs/coo-tunel.json
+  'Canal IAs - tunel Coo'     = @{ js = Join-Path $relevo 'herramientas\tunel-coo.js';     wd = Join-Path $relevo 'herramientas' }
 }
+if (-not (Get-Command cloudflared -ErrorAction SilentlyContinue) -and -not (Test-Path (Join-Path $env:USERPROFILE '.local\bin\cloudflared.exe'))) { Write-Host "   (sin cloudflared: la tarea «Canal IAs - tunel Coo» no abrirá el túnel de Coo hasta instalarlo; ver SETUP.md, paso 11)" -ForegroundColor Yellow }
 # v154: sin ventana (wscript + oculto-node.vbs). Con powershell -WindowStyle Hidden, Windows Terminal abría una pestaña visible.
 $vbsNode = Join-Path $relevo 'herramientas\oculto-node.vbs'
 foreach ($n in $tareas.Keys) {
