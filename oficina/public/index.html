@@ -1053,7 +1053,7 @@ header h1{font-size:17px}
 .chip{background:none!important;padding:0;font-weight:600;font-size:var(--t-s);display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
 .chip::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
 .e-cerrado::before,.e-olvidado::before{background:none;box-shadow:inset 0 0 0 1.5px currentColor}
-.e-humano{color:var(--acento)}
+.e-humano{color:var(--acento)}.e-nuevo{color:var(--humano)}
 #temas .tl-cab{font-size:var(--t-xs);letter-spacing:.03em}
 #temas .tl-fila{padding:11px 10px}
 #temas .tl-fila.tuya{background:none;box-shadow:none}
@@ -1300,7 +1300,7 @@ body.ligero .eq-ia.trabaja .eq-av::after{animation:none;opacity:.35}
 #solo-lectura .sl-que{flex:none}#solo-lectura .sl-como{overflow:hidden;text-overflow:ellipsis;min-width:0;margin-left:6px}
 .sub .vivo.ro{background:var(--pausa)}
 @media (max-width:640px){#solo-lectura .sl-como{display:none}#solo-lectura{padding:8px 12px;font-size:var(--t-s)}}
-body.solo-lectura :is(#p-enviar,#deti .ok-bot .btn,#p-bots .btn,[data-p-pausa],[data-kg-pausa],[data-kg-nuevo],[data-ext-hecho]){opacity:.45;cursor:not-allowed;box-shadow:none}
+body.solo-lectura :is(#p-enviar,#deti .ok-bot .btn,#p-bots .btn,[data-p-pausa],[data-p-te-toca],[data-kg-pausa],[data-kg-nuevo],[data-ext-hecho]){opacity:.45;cursor:not-allowed;box-shadow:none}
 .p-escribir{display:none;order:1;align-self:flex-start;background:none;border:0;padding:4px 0;font:600 var(--t-s) var(--fuente);color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 @media (max-width:640px){
   #panel .p-cab{padding:var(--s3) var(--s4)}
@@ -1648,7 +1648,7 @@ body.informe-on{overflow:hidden}
 </aside>
 <script>
 // v162 (diseño): estados sin emoji; el color lo pone un punto (.chip::before), igual en toda la oficina
-const EST={humano:"Te toca",parado:"Parado",frenado:"Frenado",marcha:"En marcha",espera_ia:"Esperando a otra IA",espera_otro:"Esperando a otros",pausa:"Acaba de contestar",cerrado:"Cerrado",olvidado:"Olvidado"};
+const EST={nuevo:"Nuevo",humano:"Te toca",parado:"Parado",frenado:"Frenado",marcha:"En marcha",espera_ia:"Esperando a otra IA",espera_otro:"Esperando a otros",pausa:"Acaba de contestar",cerrado:"Cerrado",olvidado:"Olvidado"};
 const delegadoA=h=>(h&&h.delegado&&h.estado!=="cerrado"&&h.delegado.quien)||"";
 const kEst=h=>delegadoA(h)?"delegado":h.estado;
 function marcaDelegados(j){ if(!j||!Array.isArray(j.hilos)) return j;
@@ -1658,7 +1658,7 @@ function marcaDelegados(j){ if(!j||!Array.isArray(j.hilos)) return j;
     h.motivo=`⚙️ Lo lleva ${q}${repite?"":` (${n})`}: no te toca a ti desde aquí`; });
   if(Array.isArray(j.deTi)) j.deTi=j.deTi.filter(d=>{ const h=d.hilo&&j.hilos.find(x=>x.ts===d.hilo); return !delegadoA(h); });
   return j; }
-function estDe(h){ if(!h) return ""; if(h.delegado&&h.delegado.quien&&h.estado!=="cerrado") return "Lo lleva "+h.delegado.quien;
+function estDe(h){ if(!h) return ""; if(h.estado==="nuevo") return "Nuevo"; if(h.delegado&&h.delegado.quien&&h.estado!=="cerrado") return "Lo lleva "+h.delegado.quien;
   if(h.radar) return "📡 En el radar"; if(h.caducado) return "⌛ Caducado"; if(h.nadieHace) return "Nadie lo está haciendo";
   if(h.estado==="espera_otro"&&h.esperaA&&(h.esperaA.proceso||h.esperaA.quien)) return h.esperaA.proceso?"Esperando a un proceso":"Esperando a "+h.esperaA.quien;
   if(h.estado==="marcha"){ const tm=[...new Set([...(h.trabajan||[]).map(x=>x&&x.ia),...(h.enMarcha||[]).map(x=>x&&(x.quien||x))].filter(x=>typeof x==="string"&&x))]; if(tm.length) return tm.join(" y ")+" trabajando"; }
@@ -2755,7 +2755,7 @@ EST.cerrado="✔️ Sin pendientes"; EST.olvidado="💤 Sin respuesta (>3 h)";
 function pintaTemasBase(j){
   const g={};
   j.hilos.forEach(h=>{const k=h.tema||h.titulo;(g[k]=g[k]||[]).push(h);});
-  const orden={humano:0,parado:1,frenado:2,marcha:3,espera_ia:4,espera_otro:5,pausa:5,olvidado:6,cerrado:7};
+  const orden={nuevo:0,humano:1,parado:2,frenado:3,marcha:4,espera_ia:5,espera_otro:6,pausa:6,olvidado:7,cerrado:8};
   const temas=Object.entries(g).map(([k,hs])=>{
     hs.sort((a,b)=>(orden[a.estado]??9)-(orden[b.estado]??9)||b.desde-a.desde);
     const u=hs[0];
@@ -3818,12 +3818,13 @@ function resumenLlegada(j,desde){
   const cerrados=j.hilos.filter(h=>h.estado==="cerrado"&&h.desde>desde&&!tuyoCerrado(h));
   const cuenta={Coo:0,Claude:0,Cursor:0}; j.hilos.forEach(h=>(h.msgs||[]).forEach(m=>{ if(m.t>desde&&m.quien in cuenta) cuenta[m.quien]++; }));
   const tuyos=j.hilos.filter(h=>h.estado==="humano");
-  const total=nuevos.length+cerrados.length+Object.values(cuenta).reduce((a,b)=>a+b,0)+tuyos.length;
+  const jiraNuevos=j.hilos.filter(h=>h.estado==="nuevo");
+  const total=nuevos.length+cerrados.length+Object.values(cuenta).reduce((a,b)=>a+b,0)+tuyos.length+jiraNuevos.length;
   let s=document.getElementById("llegada");
   if(!s){ s=document.createElement("section"); s.id="llegada"; s.className="caja"; document.querySelector("main").prepend(s); }
   s.innerHTML=`<div class="ll-cab"><h2>👋 Mientras no estabas <span class="h2-sub">desde ${fechaCorta(desde).replace(" a las "," ")} · hace ${hace(desde)}</span></h2><button type="button" class="btn" id="ll-ok">Entendido</button></div>`+
     (total?`<div class="ll-grid">
-      <div><b>${nuevos.length}</b><span>temas nuevos</span></div><div><b>${cerrados.length}</b><span>cerrados</span></div>
+      <div><b>${nuevos.length}</b><span>temas nuevos</span></div><div><b>${jiraNuevos.length}</b><span>Jira Nuevo</span></div><div><b>${cerrados.length}</b><span>cerrados</span></div>
       <div><b>${tuyos.length+j.deTi.filter(d=>d.tipo!=="hilo").length}</b><span>te esperan</span></div>
       <div><b>${Object.values(cuenta).reduce((a,b)=>a+b,0)}</b><span>mensajes de las IAs (Coo ${cuenta.Coo} · Claude ${cuenta.Claude} · Cursor ${cuenta.Cursor})</span></div></div>
       ${nuevos.length||tuyos.length?`<div class="ll-lista">${[...tuyos.map(h=>[h,"🙋 te espera"]),...nuevos.filter(h=>!tuyos.includes(h)).map(h=>[h,"🌱 nuevo"])].slice(0,6).map(([h,et])=>`<button type="button" class="fi-hilo" data-abrir="${esc(h.ts)}"><b>${esc(h.titulo)}</b><span>${et} · ${esc(h.motivo)}</span></button>`).join("")}</div>`:""}`
@@ -4806,7 +4807,7 @@ new MutationObserver(()=>{ if(resEnvio.classList.contains("ok")&&abierto&&/Envia
 
 // ================= v71: vista kanban de tus temas =================
 let vistaTemas=guarda.get("oficina-vista-temas")||"lista";
-const COLS_K=[["Te toca","humano",["humano"]],["En marcha","marcha",["marcha","pausa","espera_ia","espera_otro"]],["Parado","parado",["parado","frenado"]],["Cerrado","cerrado",["cerrado","olvidado"]]];
+const COLS_K=[["Nuevo","nuevo",["nuevo"]],["Te toca","humano",["humano"]],["En marcha","marcha",["marcha","pausa","espera_ia","espera_otro"]],["Parado","parado",["parado","frenado"]],["Cerrado","cerrado",["cerrado","olvidado"]]];
 function marcasTema(hs){ const nov=hs.some(tieneNovedad), bor=hs.some(h=>borradores[h.ts]); return `${nov?`<span class="nov" title="Mensajes nuevos sin leer">●</span>`:""}${bor?`<span class="tl-bor" title="Tienes un borrador sin enviar">✏️</span>`:""}`; }
 function temasVista64(j,interior){
   inicVistos(j);
@@ -4822,13 +4823,13 @@ function temasVista64(j,interior){
   }
   // kanban: una tarjeta por tema, en la columna de su estado más urgente
   const g={}; j.hilos.forEach(h=>{ (g[claveNota(h)]=g[claveNota(h)]||[]).push(h); });
-  const orden={humano:0,parado:1,frenado:2,marcha:3,espera_ia:4,espera_otro:5,pausa:5,olvidado:6,cerrado:7};
+  const orden={nuevo:0,humano:1,parado:2,frenado:3,marcha:4,espera_ia:5,espera_otro:6,pausa:6,olvidado:7,cerrado:8};
   const temas=Object.entries(g).map(([k,hs])=>{ hs.sort((a,b)=>(orden[a.estado]??9)-(orden[b.estado]??9)||b.desde-a.desde); return {k,hs,u:hs[0]}; });
   const fs=fijados();
   document.getElementById("temas-lista").innerHTML=`<div class="kanban">${COLS_K.map(([tit,cl,ests])=>{ const ts=temas.filter(t=>ests.includes(t.u.estado)).sort((a,b)=>(fs.includes(b.k)-fs.includes(a.k))||b.u.desde-a.u.desde);
     return `<div class="kb-col kb-${cl}"><div class="kb-cab">${tit} <span>${ts.length}</span></div>${ts.map(t=>`<div class="kb-tarj" data-abrir="${esc(t.u.ts)}" tabindex="0" role="button">
       <div class="kb-tit">${fs.includes(t.k)?"📌 ":""}${marcasTema(t.hs)} ${esc(t.k)}</div><div class="kb-mot">${esc(t.u.motivo)}</div>
-      <div class="kb-pie"><span>${t.hs.length>1?t.hs.length+" conversaciones":"1 conversación"}${(t.u.n||0)>HILO_LARGO?` · 🧵 ${t.u.n}`:""}</span><span>${hace(t.u.desde)}</span></div></div>`).join("")||`<div class="kb-vacia">—</div>`}</div>`; }).join("")}</div>`;
+      <div class="kb-pie"><span>${t.hs.length>1?t.hs.length+" conversaciones":"1 conversación"}${(t.u.n||0)>HILO_LARGO?` · 🧵 ${t.u.n}`:""}</span><span>${hace(t.u.desde)}</span>${t.u.estado==="nuevo"?`<button type="button" class="btn" data-p-te-toca="${esc(t.u.ts)}" style="margin-top:6px">Pasar a Te toca</button>`:""}</div></div>`).join("")||`<div class="kb-vacia">—</div>`}</div>`; }).join("")}</div>`;
 };
 document.addEventListener("click",e=>{ const b=e.target.closest&&e.target.closest("[data-vista]"); if(!b) return; vistaTemas=b.dataset.vista; guarda.set("oficina-vista-temas",vistaTemas); if(J) pintaTemas(J); });
 // título de la pestaña: los mensajes sin leer también cuentan
@@ -5064,7 +5065,7 @@ viajeCalle=function(v,entrando,ocultos,acomp){
   try{ return viajeCalleV92(v,entrando,ocultos,acomp); } finally { EDIF.puerta=puertaOrig; }
 };
 
-const KG_COLS=[["POR HACER","toca",["humano","parado","frenado","espera_ia","olvidado"]],["EN MARCHA","marcha",["marcha","pausa","espera_otro"]],["HECHO hoy","hecho",["cerrado"]]];
+const KG_COLS=[["NUEVO","nuevo",["nuevo"]],["POR HACER","toca",["humano","parado","frenado","espera_ia","olvidado"]],["EN MARCHA","marcha",["marcha","pausa","espera_otro"]],["HECHO hoy","hecho",["cerrado"]]];
 function objetivosAp(){ AP.ajustes.objetivos=AP.ajustes.objetivos||{}; return AP.ajustes.objetivos; }
 function objetivoDeTema(k,hs){ return objetivosAp()[k]||(hs.find(h=>h.objetivo)||{}).objetivo||""; }
 { const st=document.createElement("style"); st.textContent=`
@@ -5074,10 +5075,10 @@ function objetivoDeTema(k,hs){ return objetivosAp()[k]||(hs.find(h=>h.objetivo)|
   .kg-caja{background:var(--bg,#f6f1e7);color:var(--ink);border:1px solid var(--line);border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.35);width:min(1180px,100%);padding:16px 18px 20px}
   .kg-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}.kg-cab h2{margin:0;font-size:20px;flex:1}
   .kg-x{border:0;background:none;font-size:24px;line-height:1;cursor:pointer;color:inherit;padding:2px 6px}
-  .kg-cols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+  .kg-cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
   .kg-col{background:var(--panel-2,#fff);border:1px solid var(--line);border-radius:14px;padding:10px;min-height:120px}
   .kg-col h3{margin:0 0 8px;font-size:13px;letter-spacing:.04em;display:flex;justify-content:space-between}
-  .kg-col.toca h3{color:var(--humano)}.kg-col.marcha h3{color:var(--marcha,#1d4ed8)}.kg-col.hecho h3{color:light-dark(#15803d,#4ade80)}
+  .kg-col.nuevo h3{color:var(--humano)}.kg-col.toca h3{color:var(--humano)}.kg-col.marcha h3{color:var(--marcha,#1d4ed8)}.kg-col.hecho h3{color:light-dark(#15803d,#4ade80)}
   .kg-t{background:var(--panel,#fff);border:1px solid var(--line);border-left:4px solid var(--line);border-radius:10px;padding:9px 10px;margin-bottom:8px;display:flex;flex-direction:column;gap:5px}
   .kg-col.toca .kg-t{border-left-color:#f59e0b}.kg-col.marcha .kg-t{border-left-color:#60a5fa}.kg-col.hecho .kg-t{border-left-color:#4ade80;opacity:.85}
   .kg-t.tuyo{border-left-color:var(--humano);box-shadow:0 0 0 1px var(--humano) inset}
@@ -5108,7 +5109,7 @@ function pintaKanbanGrandeBase(){
   const hoy0=(()=>{ const t=new Date(); t.setHours(0,0,0,0); return t.getTime(); })();
   const g={}; J.hilos.forEach(h=>{ if((MANT_TEMA&&MANT_TEMA(h))||h.caducado) return;
   (g[claveNota(h)]=g[claveNota(h)]||[]).push(h); });
-  const orden={humano:0,parado:1,frenado:2,espera_ia:3,olvidado:4,marcha:5,pausa:6,espera_otro:6,cerrado:7};
+  const orden={nuevo:0,humano:1,parado:2,frenado:3,espera_ia:4,olvidado:5,marcha:6,pausa:7,espera_otro:7,cerrado:8};
   const temas=Object.entries(g).map(([k,hs])=>{ hs.sort((a,b)=>(orden[a.estado]??9)-(orden[b.estado]??9)||b.desde-a.desde); return {k,hs,u:hs[0]}; });
   const cols=KG_COLS.map(([tit,cl,ests])=>{
     const ts=temas.filter(t=>ests.includes(t.u.estado)&&(cl!=="hecho"||t.u.desde>=hoy0)).sort((a,b)=>(a.u.estado==="humano"?0:1)-(b.u.estado==="humano"?0:1)||b.u.desde-a.u.desde);
@@ -5117,7 +5118,7 @@ function pintaKanbanGrandeBase(){
         <div class="kg-tit" data-kg-abrir="${esc(t.u.ts)}">${t.u.estado==="humano"?"🙋 ":""}${esc(t.k)}</div>
         <div class="kg-obj ${ob?"":"vacio"}">🎯 <span>${ob?esc(ob):"Sin objetivo: ¿qué hay que lograr?"}</span><button type="button" data-kg-obj title="${ob?"Cambiar el objetivo":"Ponerle objetivo"}">✏️</button></div>
         <div class="kg-mot">${esc(t.u.motivo||"")}</div>
-        <div class="kg-pie"><span>${estDe(t.u)||t.u.estado}</span><span>${t.hs.length>1?t.hs.length+" conversaciones · ":""}${hace(t.u.desde)}</span></div></div>`; }).join("");
+        <div class="kg-pie"><span>${estDe(t.u)||t.u.estado}</span><span>${t.hs.length>1?t.hs.length+" conversaciones · ":""}${hace(t.u.desde)}</span>${t.u.estado==="nuevo"?`<button type="button" class="btn" data-p-te-toca="${esc(t.u.ts)}">Pasar a Te toca</button>`:""}</div></div>`; }).join("");
     return `<div class="kg-col ${cl}"><h3>${tit} <span>${ts.length}</span></h3>${tarj||`<div class="kg-nada">Nada por aquí.</div>`}</div>`; }).join("");
   m.innerHTML=`<div class="kg-caja"><div class="kg-cab"><h2>📋 Tu kanban</h2><button type="button" class="btn pri" data-kg-nuevo>＋ Nuevo tema</button><button type="button" class="kg-x" data-kg-cerrar aria-label="Cerrar">×</button></div>
     <form class="kg-nuevo" hidden>
@@ -6632,9 +6633,12 @@ document.addEventListener("click",e=>{
   const r=e.target.closest("[data-reanuda]"); if(r){ e.stopPropagation(); reanuda(r.dataset.reanuda); return; }
   const kp=e.target.closest("[data-kg-pausa]"); if(kp){ e.stopPropagation(); const t=kp.closest(".kg-t"); formPausa(t.dataset.k,t); return; }
   const pp=e.target.closest("[data-p-pausa]"); if(pp){ e.stopPropagation(); const h=J&&J.hilos.find(x=>x.ts===abierto); if(h) formPausa(claveNota(h),document.getElementById("p-marca")); }
+  const tt=e.target.closest("[data-p-te-toca]"); if(tt&&J){ e.stopPropagation(); const h=J.hilos.find(x=>x.ts===tt.dataset.pTeToca); if(h) contestaDesdeBandeja(h,"[te toca]",tt,false); return; }
 },true);
-function abrirPaso118(ts){     const bar=document.getElementById("p-marca"); if(bar&&ts!=="__temas"&&!bar.querySelector("[data-p-pausa]"))
-  bar.insertAdjacentHTML("beforeend",`<button type="button" class="btn" data-p-pausa title="Aparcarlo hasta una fecha o hasta que lo reanudes: no sale en Depende de ti ni presiona a nadie">⏸ En pausa</button>`); };
+function abrirPaso118(ts){ const bar=document.getElementById("p-marca"); if(!bar||ts==="__temas") return;
+  const h=J&&J.hilos.find(x=>x.ts===ts);
+  if(h&&h.estado==="nuevo"&&!bar.querySelector("[data-p-te-toca]")) bar.insertAdjacentHTML("beforeend",`<button type="button" class="btn pri" data-p-te-toca="${esc(ts)}">Pasar a Te toca</button>`);
+  if(!bar.querySelector("[data-p-pausa]")) bar.insertAdjacentHTML("beforeend",`<button type="button" class="btn" data-p-pausa title="Aparcarlo hasta una fecha o hasta que lo reanudes: no sale en Depende de ti ni presiona a nadie">⏸ En pausa</button>`); };
 function kanbanPaso118(){
   const m=document.getElementById("kgr"); if(!m||m.hidden) return;
   m.querySelectorAll(".kg-t .kg-bot").forEach(b=>{ if(!b.closest(".kg-col.hecho")&&!b.querySelector("[data-kg-pausa]")) b.insertAdjacentHTML("afterbegin",`<button type="button" class="btn" data-kg-pausa title="Aparcarlo hasta una fecha o hasta que lo reanudes">⏸ Pausa</button>`); });
