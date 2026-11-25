@@ -7396,7 +7396,7 @@ function quitaCaida(){
     if(document.hidden&&window.__primeraPinta){ ultClave=clave; ultT=Date.now(); pintaAlVolver=true;
       try{ aplicaPausas(j); aplicaCierres(j); marcaRadarYCaducados(j); revisaAvisos(j); }catch(e){} try{ quizaRecarga(j); }catch(e){} return; }
     pintaAlVolver=false;
-    if(!window.__primeraPinta){ window.__primeraPinta=true; const t0=Date.now(); while(!AP.listo&&Date.now()-t0<1500) await new Promise(r=>setTimeout(r,60)); }
+    if(!window.__primeraPinta){ window.__primeraPinta=true; const t0=Date.now(); while(!AP.listo&&Date.now()-t0<500) await new Promise(r=>setTimeout(r,60)); }
     ultClave=clave; ultT=Date.now(); estadoLocalSucio=false;
     try{ pinta(j); }
     catch(err){ console.error("oficina: fallo al pintar",err); const p=document.getElementById("p-act"); p.textContent="⚠️ fallo al pintar la oficina (F12 → consola)"; p.className="sub caido"; try{ quizaRecarga(j); }catch(e2){} }
@@ -7614,7 +7614,9 @@ document.addEventListener("click",async ev=>{
   catch(e){ toast("⚠️ La oficina no contesta: prueba otra vez"); }
   cont.dataset.h=""; estadoLocalSucio=true; try{ carga(); }catch(e){}
 });
-carga();setInterval(carga,15000);
+carga();
+// sondeo de respaldo: sin pestaña a la vista no se pide nada (al volver ya se llama a carga()); con SSE vivo, cada 60 s; sin SSE, cada 15 s
+(function sondeo(){ setTimeout(()=>{ try{ if(!document.hidden) carga(); }catch(e){} sondeo(); },eventosVivos?60000:15000); })();
 </script>
 </body>
 </html>

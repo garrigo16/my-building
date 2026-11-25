@@ -2531,20 +2531,23 @@ const esCanal = (dir) => /oca-salesforce|wt-canal|wt-[\w-]+-claude$|Oca-Global/i
 const esTrabajo = (dir) => /oca-salesforce|Oca-Global|^[A-Z]--oca-sf$|--claude-relevo(--claude-worktrees-[\w-]+)?$|wt-canal|wt-[\w-]+-claude$/i.test(dir) || dir.toLowerCase().startsWith(CONF.edificio.proyectoClaude.toLowerCase());
 async function leerConsumo({ base = path.join(HOME, ".claude", "projects"), fichero = CONSUMO_F } = {}) {
   const limite = Date.now() - 9 * 86400e3;
-  let dirs = []; try { dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory() && esTrabajo(d.name)).map((d) => d.name); } catch (e) { return; }
+  const cede = () => new Promise((ok) => setImmediate(ok)); let vistos = 0;
+  let dirs = []; try { dirs = (await fs.promises.readdir(base, { withFileTypes: true })).filter((d) => d.isDirectory() && esTrabajo(d.name)).map((d) => d.name); } catch (e) { return; }
   for (const dir of dirs) {
-    let fs_ = []; try { fs_ = fs.readdirSync(path.join(base, dir)).filter((f) => f.endsWith(".jsonl")); } catch (e) { continue; }
+    let fs_ = []; try { fs_ = (await fs.promises.readdir(path.join(base, dir))).filter((f) => f.endsWith(".jsonl")); } catch (e) { continue; }
     for (const f of fs_) {
-      const ruta = path.join(base, dir, f); let st; try { st = fs.statSync(ruta); } catch (e) { continue; }
+      if (++vistos % 8 === 0) await cede();   // v-rend: ceder el hilo al recorrer muchos ficheros
+      const ruta = path.join(base, dir, f); let st; try { st = await fs.promises.stat(ruta); } catch (e) { continue; }
       if (st.mtimeMs < limite) continue;
       const prev = consumo.archivos[ruta] || { off: 0 }; let off = st.size < prev.off ? 0 : prev.off;
       if (st.size === off) continue;
       // se lee por trozos desde la última posición; la línea a medias se deja para la próxima vez
-      const fd = fs.openSync(ruta, "r"); let resto = "";
+      let fh; try { fh = await fs.promises.open(ruta, "r"); } catch (e) { continue; }
+      let resto = "";
       try {
         const buf = Buffer.alloc(4 * 1024 * 1024);
         while (off < st.size) {
-          const n = fs.readSync(fd, buf, 0, Math.min(buf.length, st.size - off), off); if (!n) break;
+          const n = (await fh.read(buf, 0, Math.min(buf.length, st.size - off), off)).bytesRead; if (!n) break;
           const txt = resto + buf.toString("utf8", 0, n); const corte = txt.lastIndexOf("\n");
           const lineas = corte >= 0 ? txt.slice(0, corte).split("\n") : []; resto = corte >= 0 ? txt.slice(corte + 1) : txt;
           off += n;
@@ -2569,15 +2572,19 @@ async function leerConsumo({ base = path.join(HOME, ".claude", "projects"), fich
           await new Promise((ok) => setImmediate(ok));   // no bloquear el servidor con ficheros grandes
         }
         off -= Buffer.byteLength(resto, "utf8");
-      } finally { fs.closeSync(fd); }
+      } finally { await fh.close().catch(() => {}); }
       consumo.archivos[ruta] = { off };
     }
   }
   // limpieza: fuera días de más de 30 días y ficheros que ya no existen
   for (const k of Object.keys(consumo.dias)) if (Date.parse(k) < Date.now() - 30 * 86400e3) delete consumo.dias[k];
   for (const k of Object.keys(consumo.ses || {})) if (Date.parse(k) < Date.now() - 8 * 86400e3) delete consumo.ses[k];
-  for (const k of Object.keys(consumo.archivos)) if (!fs.existsSync(k)) delete consumo.archivos[k];
-  try { fs.mkdirSync(path.dirname(fichero), { recursive: true }); fs.writeFileSync(fichero + ".tmp", JSON.stringify(consumo)); fs.renameSync(fichero + ".tmp", fichero); } catch (e) {}
+  let n16 = 0;
+  for (const k of Object.keys(consumo.archivos)) {
+    if (++n16 % 16 === 0) await cede();
+    try { await fs.promises.access(k); } catch (e) { delete consumo.archivos[k]; }
+  }
+  try { await fs.promises.mkdir(path.dirname(fichero), { recursive: true }); await fs.promises.writeFile(fichero + ".tmp", JSON.stringify(consumo)); await fs.promises.rename(fichero + ".tmp", fichero); } catch (e) {}
 }
 let gastoCache = { t: 0, v: null };
 function gastoSesionesCada(ahora = Date.now(), calcula = gastoSesiones) {
@@ -2589,8 +2596,13 @@ const gitBienT = {};
 const avisoGit = (bienT, ahora = Date.now(), desde = 0) => ahora - (bienT || desde || 0) > 5 * MIN;
 function gastoSesiones(logs = LOGS) {
   const mapa = {}; const SD = path.join(logs, "sesiones-slack");
-  try { for (const f of fs.readdirSync(SD)) { try { const sid = fs.readFileSync(path.join(SD, f), "utf8").trim(); const m = f.match(/^([A-Z0-9]+)-(\d+\.\d+)$/); if (sid && m) mapa[sid] = { canal: m[1], hilo: m[2] }; } catch (e) {} } } catch (e) {}
-  for (const l of lineas(path.join(logs, "sesiones-slack.log"), 5000)) {
+  const esLOGS = logs === LOGS, logSes = path.join(logs, "sesiones-slack.log");
+  if (esLOGS) {   // v-rend: con los logs reales, el mapa sesión→hilo sale de la caché por mtime y las líneas de lo precargado (o lectura acotada)
+    for (const [sid, hilo] of Object.entries(sesionesPorHilo(SD))) if (/^\d+\.\d+$/.test(hilo)) mapa[sid] = { canal: CH, hilo };
+  } else {
+    try { for (const f of fs.readdirSync(SD)) { try { const sid = fs.readFileSync(path.join(SD, f), "utf8").trim(); const m = f.match(/^([A-Z0-9]+)-(\d+\.\d+)$/); if (sid && m) mapa[sid] = { canal: m[1], hilo: m[2] }; } catch (e) {} } } catch (e) {}
+  }
+  for (const l of (esLOGS && pre.lineas.get(logSes + "|600")) || lineas(logSes, esLOGS ? 1500 : 5000)) {
     const m = l.match(/hilo ([\d.]+) .*?(?:--session-id|--resume|vieja=)\s*([0-9a-f-]{36})/); if (m && !mapa[m[2]]) mapa[m[2]] = { canal: CH, hilo: m[1] };
   }
   const equiv = (x) => x.inp + 1.25 * x.cw + 0.1 * x.cr + 5 * x.out;
@@ -2611,6 +2623,7 @@ function gastoSesiones(logs = LOGS) {
 }
 function quizaConsumo() {
   if (consumoEnCurso || Date.now() - consumoT < 5 * MIN) return;
+  if (!estado.listo && Date.now() - arranque < 20e3) return;   // v-rend: en el arranque, primero que el panel quede listo
   consumoEnCurso = true;
   leerConsumo().then(() => { consumoT = Date.now(); delete errores.consumo; if (estado.listo) estado.consumo = consumo.dias; })
     .catch((e) => { errores.consumo = limpiaErr(e.message); consumoT = Date.now(); }).finally(() => { consumoEnCurso = false; });
@@ -2716,7 +2729,7 @@ async function refrescar() {
   rend.fase = "leer Slack y procesos";   // v503
   await Promise.all(tareas);
   rend.fase = "semana y consumo"; quizaSemana(); quizaConsumo();
-  if (!gitListo && Date.now() - arranque < 90e3) return;
+  if (!gitListo && Date.now() - arranque < 15e3) return;
   if (!gitListo && !errores.git) errores.git = "aún sin leer (el equipo va lento): lo de las IAs puede no estar al día y no despierto a nadie hasta leerlo";
   rend.fase = "precargar logs"; await precargaLogs().catch(() => {});   // v515: sin bloquear
   rend.fase = "logs y avisos";
@@ -3092,6 +3105,27 @@ function tokenHumano() {
   } catch (e) { v = null; }
   if (!PRUEBAS) tokenCache = { t: Date.now(), v };
   return v;
+}
+// v-rend: estáticos de public/ en memoria (con window.EDIFICIO ya inyectado en index.html) y gzip nivel 1 precalculado.
+// El mtime se comprueba como mucho cada 1,5 s; si cambia la identidad de la config (refrescaConfig), el index.html se rehace.
+const cacheEst = new Map();
+const identidadPagina = () => JSON.stringify({ nombre: CONF.persona.nombre, canal: CONF.slack.canalNombre, visitantes: CONF.oficina.visitantes }).replace(/</g, "\\u003c");
+async function sirveEstatico(f, acepta = "", ahora = Date.now()) {
+  const esIndex = f.endsWith("index.html"), ident = esIndex ? identidadPagina() : "";
+  let c = cacheEst.get(f);
+  if (!c || ahora - c.chk > 1500 || c.ident !== ident) {
+    let st; try { st = await fs.promises.stat(f); } catch (e) { cacheEst.delete(f); return null; }
+    if (!c || c.mtime !== st.mtimeMs || c.ident !== ident) {
+      let buf; try { buf = await fs.promises.readFile(f); } catch (e) { cacheEst.delete(f); return null; }
+      // la página recibe la identidad de la config (nombre de la persona y de su canal) en window.EDIFICIO
+      if (esIndex) buf = Buffer.from(String(buf).replace("</head>", `<script>window.EDIFICIO=${ident}</script><script src="/persona.js"></script></head>`));
+      const tipo = f.endsWith(".html") ? "text/html" : f.endsWith(".js") ? "text/javascript" : f.endsWith(".css") ? "text/css" : "application/octet-stream";
+      c = { mtime: st.mtimeMs, ident, buf, gz: require("zlib").gzipSync(buf, { level: 1 }), tipo, chk: ahora };
+      cacheEst.set(f, c);
+    } else c.chk = ahora;
+  }
+  const gzip = /\bgzip\b/i.test(String(acepta || ""));
+  return { buf: gzip ? c.gz : c.buf, gzip, tipo: c.tipo };
 }
 async function refrescaConfig(home = HOME) {
   const P = fs.promises;
@@ -3954,13 +3988,11 @@ const servidor = PRUEBAS ? null : http.createServer((req, res) => {
   }
   const ruta = req.url.split("?")[0];
   const f = path.join(__dirname, "public", ruta === "/" ? "index.html" : path.basename(ruta));
-  fs.readFile(f, (err, buf) => {
-    if (err) { res.writeHead(404); return res.end("no"); }
-    const tipo = f.endsWith(".html") ? "text/html" : f.endsWith(".js") ? "text/javascript" : f.endsWith(".css") ? "text/css" : "application/octet-stream";
-    // la página recibe la identidad de la config (nombre de la persona y de su canal) en window.EDIFICIO
-    if (f.endsWith("index.html")) buf = Buffer.from(String(buf).replace("</head>", `<script>window.EDIFICIO=${JSON.stringify({ nombre: CONF.persona.nombre, canal: CONF.slack.canalNombre, visitantes: CONF.oficina.visitantes }).replace(/</g, "\\u003c")}</script><script src="/persona.js"></script></head>`));
-    res.writeHead(200, { "Content-Type": tipo + "; charset=utf-8", "Cache-Control": "no-store" }); res.end(buf);
-  });
+  sirveEstatico(f, req.headers["accept-encoding"]).then((r) => {
+    if (!r) { res.writeHead(404); return res.end("no"); }
+    res.writeHead(200, { "Content-Type": r.tipo + "; charset=utf-8", "Cache-Control": "no-store", ...(r.gzip ? { "Content-Encoding": "gzip" } : {}), Vary: "Accept-Encoding" });
+    res.end(r.buf);
+  }).catch(() => { try { res.writeHead(404); res.end("no"); } catch (e) {} });
 });
 // v566: con el relevo concedido, el puerto se suelta en unos milisegundos: se reintenta cada 40 ms (10 s como mucho)
 let relevoDado = 0;
@@ -3993,6 +4025,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { textoConMenciones, limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; } };
