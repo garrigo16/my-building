@@ -1,7 +1,7 @@
 {
  "notas": {},
  "recordatorios": [],
- "ver": 5,
+ "ver": 6,
  "ajustes": {
   "cumple": "",
   "aniversario": "",
@@ -9,7 +9,9 @@
   "plantillas": null,
   "fijados": [],
   "pausas": {},
-  "cerrados": {},
+  "cerrados": {
+   "Revisar continuación SFEI-1294": 1795623185782
+  },
   "quitados": {},
   "hilosHechos": {},
   "pendientes": {}
