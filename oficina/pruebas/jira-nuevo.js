@@ -178,6 +178,84 @@ module.exports = async ({ prueba, igual, casa, C, T, setAhora, oficina }) => {
     console.log("  (fixture real no encontrado: se salta caso SFEI)");
   }
 
+  // Pasarela api.atlassian.com: fetch inyectado (sin api), sin red
+  const SITIO = "https://ocaglobal.atlassian.net", CLOUD = "672ec942-a5f0-4394-ab76-11c77a59769e";
+  const PASA = "https://api.atlassian.com/ex/jira/" + CLOUD;
+  const resp = (status, cuerpo) => ({ ok: status >= 200 && status < 300, status, json: async () => cuerpo });
+  const fetchFake = ({ tenant = 200, pasarela = 200, sitio = 200 } = {}) => {
+    const urls = [];
+    const f = async (url, op) => {
+      urls.push(url);
+      if (url === SITIO + "/_edge/tenant_info") { if (tenant === "red") throw new Error("ECONNRESET"); return resp(tenant, { cloudId: CLOUD }); }
+      const st = url.startsWith(PASA) ? pasarela : url.startsWith(SITIO) ? sitio : 599;
+      if (st === "red") throw new Error("ECONNRESET");
+      if (st !== 200) return resp(st, {});
+      const u = url.replace(PASA, "").replace(SITIO, ""), b = op && op.body ? JSON.parse(op.body) : null;
+      if (u === "/rest/api/3/myself") return resp(200, { accountId: YO, timeZone: "Europe/Madrid" });
+      if (b && b.jql && /statusCategory = "To Do"/.test(b.jql)) return resp(200, { issues: [issueToDo("TST-300", "2026-11-20T12:00:00+01:00")] });
+      return resp(200, { issues: [] });
+    };
+    f.urls = urls; return f;
+  };
+  const pasadaFetch = async (fetchFn, cfgJira = {}) => {
+    const JIRA_F = tmp(), corte = Date.parse("2026-11-20T10:00:00+01:00"), posts2 = [];
+    fs.writeFileSync(JIRA_F, JSON.stringify({ corteNuevo: corte, desde: corte - 1e7, vistos: {}, asignadas: {}, tz: "Europe/Madrid", base: true }));
+    const env = process.env.JIRA_CLOUD_ID; delete process.env.JIRA_CLOUD_ID; S.sinJiraCloudIds();
+    try {
+      await S.jiraVigia({ JIRA_F, auth, JIRA_SITE: SITIO, fetch: fetchFn, cfgJira, publicar: async (t) => { posts2.push(t); return { ok: true, ts: "1" }; },
+        ahora: () => Date.parse("2026-11-20T12:01:00+01:00"), hilos: [], conTurno: () => true });
+    } finally { if (env !== undefined) process.env.JIRA_CLOUD_ID = env; }
+    return { posts2, rest: fetchFn.urls.filter((x) => /\/rest\//.test(x)) };
+  };
+
+  await prueba("pasarela: con tenant_info, la API va a api.atlassian.com y el enlace al sitio", async () => {
+    const f = fetchFake();
+    const { posts2, rest } = await pasadaFetch(f);
+    igual(f.urls[0], SITIO + "/_edge/tenant_info", "pide tenant_info");
+    igual(rest.length > 0 && rest.every((x) => x.startsWith(PASA + "/rest/api/3/")), true, "REST por la pasarela");
+    igual(posts2.length, 1, "un post");
+    casa(posts2[0], /🔗 https:\/\/ocaglobal\.atlassian\.net\/browse\/TST-300/, "enlace en el sitio");
+    igual(/api\.atlassian\.com/.test(posts2[0]), false, "sin pasarela en el enlace");
+  });
+
+  await prueba("pasarela: JIRA_CLOUD_ID en la config evita tenant_info", async () => {
+    const f = fetchFake({ tenant: 500 });
+    const { rest } = await pasadaFetch(f, { JIRA_CLOUD_ID: CLOUD });
+    igual(f.urls.includes(SITIO + "/_edge/tenant_info"), false, "sin tenant_info");
+    igual(rest.every((x) => x.startsWith(PASA)), true, "REST por la pasarela");
+  });
+
+  await prueba("pasarela: tenant_info cachea el cloudId", async () => {
+    S.sinJiraCloudIds();
+    const env = process.env.JIRA_CLOUD_ID; delete process.env.JIRA_CLOUD_ID;
+    try {
+      const f = fetchFake();
+      igual(await S.jiraCloudId(SITIO, f, {}), CLOUD, "primera");
+      igual(await S.jiraCloudId(SITIO, f, {}), CLOUD, "segunda");
+      igual(f.urls.length, 1, "una sola llamada");
+    } finally { if (env !== undefined) process.env.JIRA_CLOUD_ID = env; S.sinJiraCloudIds(); }
+  });
+
+  await prueba("pasarela: si tenant_info falla, se usa el sitio", async () => {
+    for (const tenant of [500, "red"]) {
+      const f = fetchFake({ tenant });
+      const { posts2, rest } = await pasadaFetch(f);
+      igual(rest.length > 0 && rest.every((x) => x.startsWith(SITIO + "/rest/")), true, "REST al sitio (" + tenant + ")");
+      igual(posts2.length, 1, "publica (" + tenant + ")");
+    }
+  });
+
+  await prueba("pasarela: si la pasarela falla (401/502/red), se usa el sitio", async () => {
+    for (const pasarela of [401, 502, "red"]) {
+      const f = fetchFake({ pasarela });
+      const { posts2, rest } = await pasadaFetch(f);
+      igual(rest[0].startsWith(PASA), true, "intenta la pasarela (" + pasarela + ")");
+      igual(rest.slice(1).every((x) => x.startsWith(SITIO + "/rest/")), true, "luego el sitio (" + pasarela + ")");
+      igual(posts2.length, 1, "publica (" + pasarela + ")");
+      casa(posts2[0], /browse\/TST-300/, "enlace");
+    }
+  });
+
   await prueba("kanban: columna Nuevo primera", () => {
     const html = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
     casa(html, /const COLS_K=\[\["Nuevo","nuevo"/, "COLS_K");

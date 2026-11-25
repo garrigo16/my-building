@@ -3665,6 +3665,25 @@ var jiraSalidas = (() => { try { return JSON.parse(fs.readFileSync(JIRA_F_REAL, 
 function jiraCred(o = cfg()) {
   return o.JIRA_EMAIL && o.JIRA_API_TOKEN ? "Basic " + Buffer.from(o.JIRA_EMAIL + ":" + o.JIRA_API_TOKEN).toString("base64") : null;
 }
+// El token con scopes solo vale en la pasarela api.atlassian.com/ex/jira/<cloudId> (el sitio da 401).
+// cloudId: JIRA_CLOUD_ID (entorno o canal-slack.env); si falta, <sitio>/_edge/tenant_info (público, se cachea por sitio).
+const jiraCloudIds = new Map();
+async function jiraCloudId(site, fetchFn = fetch, o) {
+  const fijo = process.env.JIRA_CLOUD_ID || ((o || cfg()) || {}).JIRA_CLOUD_ID;
+  if (fijo) return String(fijo).trim();
+  const s = String(site || "").replace(/\/+$/, "");
+  if (!s) return null;
+  if (jiraCloudIds.has(s)) return jiraCloudIds.get(s);
+  try {
+    const r = await fetchFn(s + "/_edge/tenant_info", { headers: { Accept: "application/json" } });
+    if (!r || !r.ok) return null;
+    const id = ((await r.json()) || {}).cloudId;
+    if (!id || !/^[0-9a-f-]{20,}$/i.test(id)) return null;
+    jiraCloudIds.set(s, id);
+    return id;
+  } catch (e) { return null; }
+}
+const jiraPasarela = (id) => "https://api.atlassian.com/ex/jira/" + id;
 // texto plano de un documento ADF de Jira (las menciones salen como @Nombre)
 function adfTexto(n) {
   if (!n) return ""; if (typeof n === "string") return n;
@@ -3743,7 +3762,7 @@ function jiraApuntaSalida(v, clave, m, t, JIRA_F) {
   jiraSalidas = v.salidas;
   jiraGuardaV(JIRA_F, v);
 }
-async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: site = JIRA_SITE, fetch: fetchFn = fetch, api, publicar, ahora: ahoraFn, token, hilos: hilosIn, conTurno: conTurnoFn = conTurno } = {}) {
+async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: site = JIRA_SITE, fetch: fetchFn = fetch, api, publicar, ahora: ahoraFn, token, hilos: hilosIn, conTurno: conTurnoFn = conTurno, cfgJira } = {}) {
   if (!auth) {
     if (!jiraSinTokenAviso) { jiraSinTokenAviso = true; errores.jira = "Jira sin token: no se crean temas Nuevo"; }
     return 0;
@@ -3751,8 +3770,20 @@ async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: s
   jiraSinTokenAviso = false;
   const ahora = (ahoraFn || Date.now)();
   const hilos = hilosIn || (estado && estado.hilos) || [];
+  // API por la pasarela (si hay cloudId); si la pasarela falla, el sitio. Los enlaces /browse siguen en el sitio.
+  const cloudId = api ? null : await jiraCloudId(site, fetchFn, cfgJira);
+  let pasarela = cloudId ? jiraPasarela(cloudId) : null;
   const apiReal = api || (async (u, b) => {
-    const r = await fetchFn(site + u, { method: b ? "POST" : "GET", headers: { Authorization: auth, Accept: "application/json", ...(b ? { "Content-Type": "application/json" } : {}) }, body: b ? JSON.stringify(b) : undefined });
+    const pide = (base) => fetchFn(base + u, { method: b ? "POST" : "GET", headers: { Authorization: auth, Accept: "application/json", ...(b ? { "Content-Type": "application/json" } : {}) }, body: b ? JSON.stringify(b) : undefined });
+    let r = null;
+    if (pasarela) {
+      try { r = await pide(pasarela); } catch (e) { r = null; }
+      if (!r || r.status === 401 || r.status === 403 || r.status >= 500) {
+        anota(`JIRA: pasarela ${r ? r.status : "sin respuesta"}, uso el sitio`);
+        pasarela = null; r = null;
+      }
+    }
+    if (!r) r = await pide(site);
     if (r.status === 401 || r.status === 403) throw new Error("Jira " + r.status);
     if (!r.ok) throw new Error("Jira " + r.status);
     return r.json();
@@ -4268,6 +4299,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; }, setJiraSalidas: (o) => { jiraSalidas = o || {}; }, adfTexto, jiraFmtCorte, jiraTextoNuevo, claveJira, objetivoDe, tituloHilo, verErroresJira: () => errores.jira, resetJiraSinToken: () => { jiraSinTokenAviso = false; delete errores.jira; } };
