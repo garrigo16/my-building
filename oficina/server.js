@@ -681,8 +681,14 @@ async function repliesTodas(ts) {
 }
 const APP_OFICINA = process.env.OFICINA_APP_ID || CONF.oficina.appId || "AOFICINA001";
 const esPrefijoCoo = (t) => /^\s*Coo:/.test(String(t || ""));
+// Coo publica también con el bot del Edificio (POST /api/coo/publicar): con el nombre «Coo · Geoffrey» si el bot tiene
+// chat:write.customize o, si no, con «Coo:» delante. Es el mismo bot que usa Claude: se distingue por eso, no por el usuario.
+const NOMBRE_COO_BOT = "Coo · Geoffrey";
+const esCooBot = (m) => !!m && (m.username === NOMBRE_COO_BOT || (m.bot_profile && m.bot_profile.name) === NOMBRE_COO_BOT
+  || (!!(m.bot_id || m.app_id) && esPrefijoCoo(m.text)));
 function quien(m) {
   if (/^\s*\*?Cursor \(v[ií]a API\)/.test(m.text || "")) return "Cursor";
+  if (esCooBot(m)) return "Coo";
   if (m.user === HUMANO && esPrefijoCoo(m.text)) return "Coo";   // el conector de Coo publica con la cuenta de Humano: «Coo: …»
   if (m.user === HUMANO && (m.app_id || m.bot_id) && m.app_id !== APP_OFICINA) {
     const t = m.text || "";
@@ -832,7 +838,7 @@ async function leerSlack() {
   const hiloDe = (r, msgs) => ({ ts: r.ts, msgs: msgs.map((m) => {
       const q = quien(m), texto = emojiSlack(String(m.text || "").replace(/\s*[*_]*Enviado usando[*_]*\s*<@U[A-Z0-9]+>\s*$/i, ""));
       const pj = q === "Claude" && (texto.match(PRIV_J) || [])[1];
-      return { ts: m.ts, quien: pj ? "Humano" : q, texto, menc: menciones(m.text), ...(pj ? { privJ: pj.trim() } : {}), ...(m.app_id === APP_OFICINA ? { ofi: true } : {}) };
+      return { ts: m.ts, quien: pj ? "Humano" : q, texto, menc: menciones(m.text), ...(pj ? { privJ: pj.trim() } : {}), ...(q === "Humano" && m.app_id === APP_OFICINA ? { ofi: true } : {}) };
     }) });
   const soloMsgs = (rep) => (rep.messages || []).filter((m) => !m.subtype || m.subtype === "bot_message" || m.subtype === "thread_broadcast");
   const hilos = [];
@@ -3957,6 +3963,70 @@ function diarioHttp(req, res, { dir = path.join(HOME, ".oficina"), hosts = HOSTS
   res.end(JSON.stringify({ ok: true, equipo, equipos }));
 }
 
+// POST /api/coo/publicar: Coo (Geoffrey) publica en Slack con el bot del Edificio (SLACK_BOT_TOKEN). La llaman scripts y agentes,
+// no el navegador: sin postLocal, con «Authorization: Bearer <clave>» frente a COO_WEBHOOK_KEY (o GROK_WEBHOOK_KEY).
+// Cuerpo JSON { channel, thread_ts, text } → { ok, ts, channel, modo: "username"|"prefijo", permalink }.
+// Con chat:write.customize firma como «Coo · Geoffrey»; sin ese permiso, el texto lleva «Coo: » delante.
+const cryptoN = require("crypto");
+const huellaTok = (t) => cryptoN.createHash("sha256").update(String(t)).digest("hex");
+function claveIgual(dada, buena) {
+  const a = Buffer.from(huellaTok(dada), "hex"), b = Buffer.from(huellaTok(buena), "hex");
+  return cryptoN.timingSafeEqual(a, b) && String(dada).length === String(buena).length;
+}
+const scopesCache = new Map();   // huella del token -> { t, scopes }
+const SCOPES_MS = 15 * MIN;
+async function scopesBot(tok) {
+  const k = huellaTok(tok), c = scopesCache.get(k);
+  if (c && Date.now() - c.t < SCOPES_MS) return c.scopes;
+  const r = await leeRed("https://slack.com/api/auth.test", { method: "POST", headers: { Authorization: "Bearer " + tok } }, 10e3);
+  if (!r.json || !r.json.ok) throw new Error("auth.test: " + ((r.json && r.json.error) || "http " + r.status));
+  const scopes = String((r.headers && r.headers.get && r.headers.get("x-oauth-scopes")) || "").split(",").map((s) => s.trim()).filter(Boolean);
+  scopesCache.set(k, { t: Date.now(), scopes });
+  return scopes;
+}
+async function permalinkDe(channel, ts) {
+  try { return (await slack("chat.getPermalink", { channel, message_ts: ts })).permalink || ""; } catch (e) { return ""; }
+}
+function payloadCoo({ channel, thread_ts, text }, scopes) {
+  const custom = (scopes || []).includes("chat:write.customize");
+  const t = textoConMenciones(String(text).trim());
+  return { modo: custom ? "username" : "prefijo",
+    payload: { channel, text: custom || esPrefijoCoo(t) ? t : "Coo: " + t, ...(thread_ts ? { thread_ts } : {}), ...(custom ? { username: NOMBRE_COO_BOT } : {}) } };
+}
+function cooPublicarRuta(req, res, dep = {}) {
+  const fin = (code, o) => { res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); res.end(JSON.stringify(o)); };
+  const c = dep.cfg || cfg();
+  const buena = c.COO_WEBHOOK_KEY || c.GROK_WEBHOOK_KEY;
+  if (req.method !== "POST") return fin(405, { ok: false, error: "solo POST" });
+  if (!buena) return fin(503, { ok: false, error: "falta COO_WEBHOOK_KEY en canal-slack.env" });
+  const m = String(req.headers.authorization || "").match(/^Bearer\s+(\S+)\s*$/i);
+  if (!m) return fin(401, { ok: false, error: "falta Authorization: Bearer" });
+  if (!claveIgual(m[1], buena)) return fin(403, { ok: false, error: "clave" });
+  let cuerpo = "", grande = false;
+  req.on("data", (d) => { if (grande) return; cuerpo += d; if (cuerpo.length > 50000) { grande = true; fin(413, { ok: false, error: "demasiado grande" }); } });
+  req.on("end", async () => {
+    if (grande) return;
+    let j; try { j = JSON.parse(cuerpo); } catch (e) { return fin(400, { ok: false, error: "json roto" }); }
+    if (!j || typeof j !== "object") return fin(400, { ok: false, error: "json roto" });
+    const channel = String(j.channel || "").trim() || CH, thread_ts = String(j.thread_ts || "").trim(), text = String(j.text || "").trim();
+    if (!/^[CGD][A-Z0-9]{4,}$/.test(channel)) return fin(400, { ok: false, error: "channel no válido" });
+    if (thread_ts && !/^\d+\.\d+$/.test(thread_ts)) return fin(400, { ok: false, error: "thread_ts no válido" });
+    if (!text || text.length > 12000) return fin(400, { ok: false, error: "text vacío o demasiado largo" });
+    const tok = c.SLACK_BOT_TOKEN;
+    if (!tok) return fin(503, { ok: false, error: "falta SLACK_BOT_TOKEN" });
+    let scopes; try { scopes = await (dep.scopes || scopesBot)(tok); } catch (e) { return fin(502, { ok: false, error: limpiaErr(e.message) }); }
+    const { modo, payload } = payloadCoo({ channel, thread_ts, text }, scopes);
+    try {
+      const k = await (dep.post || slackPost)(payload, tok);
+      anota(`coo/publicar ${thread_ts || "-"} ${k && k.ok ? "ok " + k.ts : "error " + (k && k.error)} (${modo}, ${text.length} car.)`);
+      if (!k || !k.ok) return fin(502, { ok: false, error: "Slack: " + ((k && k.error) || "?") });
+      const permalink = await (dep.permalink || permalinkDe)(k.channel || channel, k.ts);
+      if (!PRUEBAS) { if (thread_ts) cacheReplies.delete(thread_ts); setTimeout(() => { tic(true).catch(() => {}); }, 1500); }
+      fin(200, { ok: true, ts: k.ts, channel: k.channel || channel, modo, permalink });
+    } catch (e) { fin(502, { ok: false, error: limpiaErr(e.message) }); }
+  });
+}
+
 const servidor = PRUEBAS ? null : http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/relevo") return relevoRuta(req, res);   // v566: la oficina nueva pide el puerto
   // v566: en el relevo (la que se va) y con el estado heredado (la que llega, hasta su primera vuelta) no se envía nada: unos segundos
@@ -3964,6 +4034,7 @@ const servidor = PRUEBAS ? null : http.createServer((req, res) => {
     if (saliendo || estado.heredado) { res.writeHead(503, { "Content-Type": "application/json; charset=utf-8", "Retry-After": "5" }); return res.end(JSON.stringify({ ok: false, error: "La oficina se está actualizando: prueba otra vez en unos segundos." })); }
     postsVivos++; let visto = false; const baja = () => { if (!visto) { visto = true; postsVivos--; } }; res.on("finish", baja); res.on("close", baja);
   }
+  if (req.url.split("?")[0] === "/api/coo/publicar") return cooPublicarRuta(req, res);
   if (req.method === "POST" && req.url === "/api/actualizar") return actualizarRuta(req, res);   // v566
   if (req.method === "POST" && req.url === "/api/estoy-en-ello") return enElloRuta(req, res);
   if (req.method === "POST" && req.url === "/api/juntar") return juntarRuta(req, res);
@@ -4025,6 +4096,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { sirveEstatico, textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; } };

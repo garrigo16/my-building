@@ -133,11 +133,13 @@ async function conectar() {
     const llamaACoo = txt.includes(`<@${COO}>`) || /(^|[\s(])@coo(-coordinador)?\b/i.test(txt);
     // el conector de Coo publica con la cuenta de Humano, sin la app de la Oficina, y empieza por «Coo:»: es Coo, no Humano.
     // No despierta a nadie salvo un [lo hace: Claude|Cursor] explícito; nunca avisar-coo.sh (aunque nombre a Coo o lleve [lo hace: Coo]).
-    if (e.user === c.SLACK_HUMANO_ID && /^\s*Coo:/.test(txt)) {
+    // Y Coo publica también con el bot del Edificio (el mismo que usa Claude): «Coo · Geoffrey» o «Coo:» delante. Igual trato.
+    const cooBot = esCooBot(e);
+    if ((e.user === c.SLACK_HUMANO_ID && /^\s*Coo:/.test(txt)) || cooBot) {
       let a = "";
       if (normal && haceIA(txtM, "cursor")) { lanzar(e, "atender-cursor-slack.sh", "Coo", txt); a += " Cursor"; }
       if (normal && haceIA(txtM, "claude")) { lanzar(e, "atender-slack.sh", "Coo", txt); a += " Claude"; }
-      if (e.type === "message") log(`mensaje de Coo (prefijo «Coo:») en ${e.channel} (${e.ts}): ${a ? "despierto a" + a : "no despierta a nadie"}`);
+      if (e.type === "message") log(`mensaje de Coo (${cooBot ? "bot del Edificio" : "prefijo «Coo:»"}) en ${e.channel} (${e.ts}): ${a ? "despierto a" + a : "no despierta a nadie"}`);
       return;
     }
     if (false && (e.user === YO || e.user === CURSOR) && normal && llamaACoo
@@ -246,6 +248,13 @@ function canalDe(c) {
   if (c.SLACK_CANAL_ID) return c.SLACK_CANAL_ID;
   try { const C = require("./config.js"), id = C.config().slack.canalId; return id && id !== C.EJEMPLO.slack.canalId ? id : ""; } catch (err) { return ""; }
 }
+// Coo publicado por el bot del Edificio (POST /api/coo/publicar de la Oficina): con el nombre «Coo · Geoffrey» o, sin el permiso
+// chat:write.customize, con «Coo:» delante y la marca de bot/app
+const NOMBRE_COO_BOT = "Coo · Geoffrey";
+function esCooBot(m) {
+  return !!m && (m.username === NOMBRE_COO_BOT || (m.bot_profile && m.bot_profile.name) === NOMBRE_COO_BOT
+    || (!!(m.bot_id || m.app_id) && /^\s*Coo:/.test(String(m.text || ""))));
+}
 function esOkCorto(t) { return require(path.join(AQUI, "regla-ok.js")).esOk(t); }
 function haceIA(t, ia) {
   return new RegExp(`\\[\\s*lo hace\\s*:?\\s*[*_]*${ia}\\b`, "i").test(String(t || "")) && !/\[\s*te toca\b/i.test(String(t || ""));
@@ -261,7 +270,7 @@ async function okParaClaudeEnHilo(c, e) {
   const t = String(ant.text || "");
   const etq = /\[\s*lo hace\s*:?\s*[*_]*claude\b/i.test(t), sinEtq = !/\[\s*(te toca|lo hace|hecho|espera)\b/i.test(t);   // v399: + [espera]
   if (!(etq || (sinEtq && /\b(ok|okey)\b/i.test(t) && /\?/.test(t) && /\bclaude\b/i.test(t)))) return null;
-  const quien = ant.user === YO ? "Claude" : ant.user === CUR ? "Cursor" : (ant.user === COO || ant.app_id) ? "Coo" : "una IA";
+  const quien = esCooBot(ant) || (ant.user === c.SLACK_HUMANO_ID && /^\s*Coo:/.test(t)) ? "Coo" : ant.user === YO ? "Claude" : ant.user === CUR ? "Cursor" : (ant.user === COO || ant.app_id) ? "Coo" : "una IA";
   return { quien, texto: t.replace(/<@[A-Z0-9]+>/g, "@").replace(/\s+/g, " ").slice(0, 400) };
 }
 
