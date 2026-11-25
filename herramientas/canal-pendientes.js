@@ -97,7 +97,44 @@ function ejecuta(r, ctx) {
   return { lineas, dice };
 }
 
-module.exports = { limpio, decide, ejecuta, nota, viejosPara, AUTORES, MAX_BLOQUES, RELANZA_MIN };
+
+// Un Claude del canal está ocupado solo si su proceso sigue vivo (claude.exe -p de claude-code).
+// No vale la antigüedad del log claude-YYYYMMDD-HHMMSS-*.log: si ya terminó, el siguiente bloque no debe esperar 25-30 min.
+function esClaudeHeadless(cmd) {
+  const c = String(cmd || "");
+  return /claude-code/i.test(c) && /(^|\s)-p(\s|$)/.test(c);
+}
+function iniDeProceso(p) {
+  if (p && Number.isFinite(+p.ini) && +p.ini) return +p.ini;
+  const raw = p && (p.CreationDate || p.creationDate);
+  if (!raw) return 0;
+  const txt = String(raw);
+  const m = txt.match(/^\/Date\((\d+)\)\/$/);
+  if (m) return +m[1];
+  const t = Date.parse(txt);
+  return Number.isFinite(t) ? t : 0;
+}
+function listarClaudeVivos() {
+  try {
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "Get-CimInstance Win32_Process -Filter \"Name='claude.exe'\" | Where-Object { $_.CommandLine -match 'claude-code' -and $_.CommandLine -match ' -p( |$)' } | Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress"],
+      { encoding: "utf8", timeout: 15e3, windowsHide: true });
+    if (r.status !== 0 || !String(r.stdout || "").trim()) return [];
+    const a = JSON.parse(String(r.stdout).replace(/^\uFEFF/, ""));
+    return Array.isArray(a) ? a : [a];
+  } catch (e) { return []; }
+}
+function claudeOcupada({ ahora = Date.now(), procesos } = {}) {
+  const lista = procesos !== undefined ? procesos : listarClaudeVivos();
+  let t = 0;
+  for (const p of lista) {
+    if (!esClaudeHeadless(p.CommandLine || p.cmd || "")) continue;
+    t = Math.max(t, iniDeProceso(p) || ahora);
+  }
+  return t || 0;
+}
+
+module.exports = { limpio, decide, ejecuta, nota, viejosPara, AUTORES, MAX_BLOQUES, RELANZA_MIN, claudeOcupada, esClaudeHeadless };
 
 if (require.main === module) {
   const arg = (n) => { const i = process.argv.indexOf("--" + n); return i > 0 ? process.argv[i + 1] : ""; };
@@ -112,9 +149,8 @@ if (require.main === module) {
     const m = l.match(/^(\S+) SI canal (\S+)/); const t = m ? Date.parse(m[1]) : 0;
     if (m && m[2] === can && ahora - t < 30 * 60e3) ocupadas.Cursor = Math.max(ocupadas.Cursor || 0, t);
   }
-  try { for (const f of fs.readdirSync(LOGS).filter((f) => /^claude-\d{8}-\d{6}-/.test(f))) {
-    const t = fs.statSync(path.join(LOGS, f)).birthtimeMs || 0; if (ahora - t < 30 * 60e3) ocupadas.Claude = Math.max(ocupadas.Claude || 0, t);
-  } } catch (e) {}
+  const tClaude = claudeOcupada({ ahora });
+  if (tClaude) ocupadas.Claude = tClaude;
   for (const l of lee(path.join(LOGS, "avisar-coo.log")).split(/\r?\n/).slice(-200)) {
     const m = l.match(/^(\S+) webhook de Coo \(hilo [\d.-]+, de el canal git \((\w+), sha [^)]*\)\): http (\d+)/); const t = m ? Date.parse(m[1]) : 0;
     if (m && m[2] === can && m[3][0] === "2" && ahora - t < 30 * 60e3) ocupadas.Coo = Math.max(ocupadas.Coo || 0, t);
