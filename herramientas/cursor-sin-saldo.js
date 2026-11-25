@@ -33,7 +33,19 @@ function bloqueoLog(donde, logs = path.join(process.env.HOME || os.homedir(), ".
 
 const hhmm = (t) => new Date(t).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Madrid" });
 
-module.exports = { entrada, entradas, bloqueo, bloqueoLog, SIN_SALDO, HORAS, hhmm };
+// ¿Hay CLI de Cursor con sesión (cursor-cli.ps1 + cursor-agent)? Entonces «sin saldo de API» NO bloquea: la vía primaria es el CLI
+// y el bloqueo solo se aplica en el respaldo por API (atender-cursor-slack.sh).
+function hayCli() {
+  try {
+    if (!fs.existsSync(path.join(__dirname, "cursor-cli.ps1"))) return false;
+    if (process.env.CURSOR_CLI && fs.existsSync(process.env.CURSOR_CLI)) return true;
+    const la = process.env.LOCALAPPDATA; if (!la) return false;
+    const d = path.join(la, "Packages", "OpenAI.Codex_2p2nqsd0c76g0", "LocalCache", "Local", "cursor-agent");
+    return fs.existsSync(path.join(d, "cursor-agent.ps1")) || fs.existsSync(path.join(d, "cursor-agent.cmd"));
+  } catch (e) { return false; }
+}
+
+module.exports = { entrada, entradas, bloqueo, bloqueoLog, SIN_SALDO, HORAS, hhmm, hayCli };
 
 if (require.main === module) {
   const [tipo, clave] = process.argv.slice(2);

@@ -3116,8 +3116,9 @@ function anota(l) { if (PRUEBAS) { anotados.push(l); return; } if (DIARIO) DIARI
 let relanzados = [];
 // Cursor sin saldo de API (usage_limit_exceeded) en este hilo y sin un SI después: ya se avisó una vez; no se le relanza (ver
 // herramientas/cursor-sin-saldo.js). En las pruebas no se mira el cursor-arranques.log de verdad (setSinSaldo pone uno falso).
+// Con el CLI de Cursor (cursor-cli.ps1 + cursor-agent) no se bloquea: el «sin saldo» solo vale para el respaldo por API.
 let cursorSinSaldo = (hilo) => { if (PRUEBAS) return null;
-  try { return require(path.join(__dirname, "..", "herramientas", "cursor-sin-saldo.js")).bloqueoLog({ hilo }, LOGS); } catch (e) { return null; } };
+  try { const CS = require(path.join(__dirname, "..", "herramientas", "cursor-sin-saldo.js")); if (CS.hayCli()) return null; return CS.bloqueoLog({ hilo }, LOGS); } catch (e) { return null; } };
 const sinSaldoAnotado = new Set();
 const AVISO_SIN_SALDO = "Cursor sigue sin saldo de API (ya avisado en el hilo): no lo relanzo; lánzalo a mano en su app.";
 function relanzaPendientes(lista, lanzar = lanzaScript, logf = path.join(LOGS, "traspasos.log"), anotar = anota, barato) {
@@ -3430,7 +3431,7 @@ function lanzarCursorComoHumano(texto, ts, hilo, lanzar = lanzaScript) {
   const f = path.join(os.tmpdir(), `slack-cursor-${Date.now()}-oficina.json`);
   try { fs.writeFileSync(f, JSON.stringify({ text: texto, channel: CH, ts, thread_ts: hilo, quien: "Humano" })); } catch (e) { anota(`hilo ${hilo} no se pudo preparar el lanzamiento de Cursor`); return; }
   const sc = path.join(HOME, ".claude", "relevo", "herramientas", "atender-cursor-slack.sh");
-  anota(`hilo ${hilo} lanzo Cursor por API como Humano (mensaje ${ts})`);
+  anota(`hilo ${hilo} lanzo Cursor por CLI como Humano (mensaje ${ts})`);
   if (lanzar([sc, f], `hilo ${hilo} Cursor lanzado como Humano`, { hilo, ia: "Cursor" })) { marcaArranque(hilo, "Cursor"); return true; }   // v506/v508
   return false;
 }

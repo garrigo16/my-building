@@ -1,7 +1,7 @@
 // correr.js - las pruebas de la oficina y de los scripts. Sin red, sin Slack, sin git remoto y sin escribir nada fuera de
 // carpetas temporales. Reloj fijo: cada caso dice a qué hora mira.
 // Uso:  node oficina/pruebas/correr.js            todas (sale con código 1 si falla alguna; pásalas antes de cada commit)
-//       node oficina/pruebas/correr.js <texto>    solo las que llevan <texto> en el nombre
+//       node oficina/pruebas/correr.js <texto>…   solo las que llevan <texto> en el nombre (o son de ese fichero, p. ej. cursor-cli); varios = cualquiera
 // Carga sola cualquier fichero de esta carpeta que exporte sus casos: module.exports = async (ayudas) => { … }.
 // Las ayudas: prueba, igual, casa, distinto, T, setAhora, oficina, tema y C (datos.js: m, ts, LOGS0…).
 "use strict";
@@ -25,8 +25,11 @@ const S = require("../server.js");
 const { T } = C;
 
 let ok = 0, mal = 0, saltadas = 0;
-const FILTRO = process.argv.slice(2).filter((a) => !a.startsWith("--")).join(" ").toLowerCase();
-const prueba = async (n, fn) => { if (FILTRO && !n.toLowerCase().includes(FILTRO)) { saltadas++; return; }
+// filtros: uno o varios (cualquiera vale); cada uno casa con el nombre del caso o con el nombre del fichero (sin .js)
+const FILTROS = process.argv.slice(2).filter((a) => !a.startsWith("--")).map((a) => a.toLowerCase());
+let FICHERO = "";
+const pasaFiltro = (n) => !FILTROS.length || FILTROS.some((f) => n.toLowerCase().includes(f) || FICHERO === f);
+const prueba = async (n, fn) => { if (!pasaFiltro(n)) { saltadas++; return; }
   try { await fn(); ok++; console.log("  ✔ " + n); } catch (e) { mal++; console.log("  ✘ " + n + "\n      " + String(e.message).split("\n").join("\n      ")); } };
 const igual = (a, b, q) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${q}: esperaba ${JSON.stringify(b)} y sale ${JSON.stringify(a)}`); };
 const casa = (x, re, q) => { if (!re.test(String(x))) throw new Error(`${q}: «${x}» no casa con ${re}`); };
@@ -41,6 +44,7 @@ const tema = (a, h) => a.hilos.find((x) => x.ts === h.ts) || (() => { throw new 
   const NO_CASOS = new Set(["correr.js", "datos.js", "en-vivo.js"]);
   const ficheros = fs.readdirSync(__dirname).filter((f) => f.endsWith(".js") && !NO_CASOS.has(f)).sort();
   for (const f of ficheros) {
+    FICHERO = f.replace(/\.js$/, "").toLowerCase();
     const mod = require(path.join(__dirname, f));
     if (typeof mod === "function") await mod({ prueba, igual, casa, distinto, C, T, oficina, tema, setAhora: (t) => { AHORA = t; } });
   }

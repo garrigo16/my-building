@@ -18,13 +18,7 @@ if [ -f "$AQUI/cursor-apagado" ] && { [ "${CANAL_PRUEBAS:-0}" != 1 ] || [ "${CUR
   echo "$(date -Is) no pude pasar el encargo a Claude (hilo $HILO)"; rm -f "$J"; exit 12
 fi
 rm -f "$J"
-# Sin saldo de API: si en este hilo Cursor ya falló con usage_limit_exceeded (y no ha arrancado después), ya se avisó UNA vez:
-# no se llama a la API ni se publica otro aviso; se espera a que Humano lo lance a mano o vuelva el saldo (un SI lo desbloquea).
-if AVISADO=$(node "$AQUI/cursor-sin-saldo.js" hilo "$HILO" 2>/dev/null); then
-  echo "$(date -Is) no relanzo Cursor en el hilo $HILO: sin saldo de API (avisado a las $AVISADO); se espera"
-  echo "$(date -Is) ESPERA hilo $HILO sin saldo de API: ya avisado a las $AVISADO, no se relanza ($QUIEN)" >> "$HOME/.canal-logs/cursor-arranques.log"
-  exit 10
-fi
+# (el bloqueo «sin saldo de API» ya no va aquí: solo se aplica en el respaldo por API, si falla el CLI con la sesión OCA)
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 responder() { printf '%s' "$1" > "$TMP/r.txt"; bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$TMP/r.txt" || true; }
 echo "$(date -Is) mención a Cursor de $QUIEN en $CH ($TS), hilo $HILO"
@@ -40,7 +34,7 @@ if [ "$QUIEN" != "Humano" ] && ! FRENO_POR=$(bash "$AQUI/freno.sh" cursor "$HILO
   fi
   exit 12
 fi
-[ -n "${CURSOR_API_KEY:-}" ] && [ -n "${SLACK_BOT_TOKEN:-}" ] || { echo "falta CURSOR_API_KEY o SLACK_BOT_TOKEN"; exit 8; }
+[ -n "${SLACK_BOT_TOKEN:-}" ] || { echo "falta SLACK_BOT_TOKEN"; exit 8; }   # CURSOR_API_KEY solo hace falta en el respaldo por API
 
 CH="$CH" HILO="$HILO" OUT="$TMP/hilo.json" node -e '
 (async()=>{ const e=process.env; let msgs=[], cur="";
@@ -66,7 +60,7 @@ let msgs=[];try{msgs=JSON.parse(fs.readFileSync(e.HILO_F,"utf8")).messages||[]}c
 const limpio=t=>String(t||"").replace(/<@([A-Z0-9]+)>/g,(m,u)=>"@"+(nom[u]||u));
 const hilo=msgs.slice(-30).map(m=>`[${nom[m.user]||m.username||m.user||"?"}] ${limpio(m.text)}`).join("\n\n");
 const text=[
- `Eres Cursor. En Slack (#${e.SLACK_CANAL_NOMBRE||"canal-humano"}, OCA) te ha mencionado ${e.QUIEN}. «Humano» es como el sistema llama a la persona para la que trabajas; se llama ${e.EDIFICIO_NOMBRE||"Humano"}: al hablarle usa su nombre; en las etiquetas y marcadores escribe siempre «Humano». Su mención no despierta tu app oficial, así que te lanzan por la API. Es un agente nuevo: nadie lo mira; un script publica tu respuesta final (en el hilo de Slack o en el canal git, según el punto 3), firmada como Cursor.`,
+ `Eres Cursor. En Slack (#${e.SLACK_CANAL_NOMBRE||"canal-humano"}, OCA) te ha mencionado ${e.QUIEN}. «Humano» es como el sistema llama a la persona para la que trabajas; se llama ${e.EDIFICIO_NOMBRE||"Humano"}: al hablarle usa su nombre; en las etiquetas y marcadores escribe siempre «Humano». Su mención no despierta tu app oficial, así que te lanzan por el CLI de Cursor (sesión OCA). Es un agente nuevo: nadie lo mira; un script publica tu respuesta final (en el hilo de Slack o en el canal git, según el punto 3), firmada como Cursor.`,
  ``,`Hilo (los últimos mensajes; el último es el que te menciona):`,`-----`,hilo,`-----`,``,
  `Qué hacer:`,
  `1. Responde a lo que te piden en ese hilo. Si necesitas el código, el repo está clonado (rama del canal). Solo lectura: no hagas commits, push, PRs ni nada en ningún org de Salesforce.`,
@@ -84,6 +78,53 @@ process.stdout.write(JSON.stringify({prompt:{text},name:"slack "+Date.now(),
   workOnCurrentBranch:true,autoCreatePR:false,
   model:{id:e.CURSOR_MODELO||"composer-2.5"}}));' > "$TMP/body.json"
 
+VIA="vía API"; CLI_OK=0
+# ---- Vía primaria: CLI de Cursor con la sesión OCA (apiKeySource "login"), sin CURSOR_API_KEY ----
+# Solo se salta en la prueba aislada de la API falsa (CANAL_PRUEBAS=1 + CURSOR_API_URL y sin CURSOR_CLI simulado).
+if ! { [ "${CANAL_PRUEBAS:-0}" = 1 ] && [ -n "${CURSOR_API_URL:-}" ] && [ -z "${CURSOR_CLI:-}" ]; }; then
+  win() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi; }
+  WORK_DIR=""
+  if [ -n "${CURSOR_WORK_DIR:-}" ] && [[ "$CURSOR_WORK_DIR" != *wt-pkf101-errores* ]]; then WORK_DIR=$CURSOR_WORK_DIR
+  elif [ -d "$HOME/wt-canal-claude" ]; then WORK_DIR="$HOME/wt-canal-claude"
+  elif [ -n "${CANAL_REPO:-}" ] && [[ "$CANAL_REPO" != *wt-pkf101-errores* ]] && [ -d "$CANAL_REPO" ]; then WORK_DIR=$CANAL_REPO
+  else WORK_DIR=$TMP; fi
+  [ -d "$WORK_DIR" ] || WORK_DIR=$TMP
+  bash "$AQUI/responder-slack.sh" --reaccion "$CH" "$TS" hourglass_flowing_sand >/dev/null 2>&1 || true
+  BODY="$TMP/body.json" OUT="$TMP/prompt.txt" node -e 'const fs=require("fs");const j=JSON.parse(fs.readFileSync(process.env.BODY,"utf8"));fs.writeFileSync(process.env.OUT,String((j.prompt&&j.prompt.text)||""))'
+  rm -f "$TMP/res.txt" "$TMP/sid.txt"
+  CLI_PS1=$(win "$AQUI/cursor-cli.ps1"); PROMPT_WIN=$(win "$TMP/prompt.txt"); WD_WIN=$(win "$WORK_DIR")
+  MAP_WIN=$(win "$HOME/.canal-logs/cursor-cli-chats.json"); RES_WIN=$(win "$TMP/res.txt"); SID_WIN=$(win "$TMP/sid.txt")
+  CURSOR_API_KEY= powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$CLI_PS1" -PromptFile "$PROMPT_WIN" -WorkDir "$WD_WIN" \
+    -Hilo "$HILO" -MappingPath "$MAP_WIN" -OutFile "$RES_WIN" -SessionOutFile "$SID_WIN" </dev/null 2>"$TMP/cli.err"
+  CLI_RC=$?
+  if [ "$CLI_RC" = 0 ] && [ -s "$TMP/res.txt" ]; then
+    OUT="$TMP/res.txt" node -e '
+      const fs=require("fs");let r=fs.readFileSync(process.env.OUT,"utf8");
+      r=r.replace(/<@([A-Z0-9]+)>/g,"@$1").replace(/<!(here|channel|everyone)>/g,"@$1").trim();
+      fs.writeFileSync(process.env.OUT,r);'
+    SID=$(tr -d '\r\n' < "$TMP/sid.txt" 2>/dev/null)
+    echo "$(date -Is) SI hilo $HILO cli-login ${SID:-ok}" >> "$HOME/.canal-logs/cursor-arranques.log"
+    echo "Cursor lanzado por CLI (sesión OCA)${SID:+: $SID}"
+    CLI_OK=1; VIA="vía CLI"
+  else
+    echo "Cursor CLI fallo (rc=$CLI_RC): $(tr '\r\n' '  ' < "$TMP/cli.err" 2>/dev/null | cut -c1-400); paso al respaldo por API"
+  fi
+fi
+
+if [ "$CLI_OK" != 1 ]; then
+# ---- Vía de respaldo: API de prepago ----
+# Sin saldo de API: si en este hilo Cursor ya falló con usage_limit_exceeded (y no ha arrancado después), ya se avisó UNA vez:
+# no se llama a la API ni se publica otro aviso; se espera a que Humano lo lance a mano o vuelva el saldo (un SI lo desbloquea).
+if AVISADO=$(node "$AQUI/cursor-sin-saldo.js" hilo "$HILO" 2>/dev/null); then
+  echo "$(date -Is) no relanzo Cursor en el hilo $HILO: sin saldo de API (avisado a las $AVISADO); se espera"
+  echo "$(date -Is) ESPERA hilo $HILO sin saldo de API: ya avisado a las $AVISADO, no se relanza ($QUIEN)" >> "$HOME/.canal-logs/cursor-arranques.log"
+  exit 10
+fi
+if [ -z "${CURSOR_API_KEY:-}" ]; then
+  echo "$(date -Is) NO hilo $HILO sin CURSOR_API_KEY de respaldo" >> "$HOME/.canal-logs/cursor-arranques.log"
+  responder "*Cursor no ha arrancado (el CLI con la sesión OCA ha fallado y no hay clave de API de respaldo).* Si corre prisa, menciónalo a mano en su app."
+  exit 10
+fi
 CCFG=$(umask 077; mktemp -p "$TMP"); printf 'user = "%s:"\n' "$CURSOR_API_KEY" > "$CCFG"
 API=https://api.cursor.com/v1/agents
 # el host es fijo: CURSOR_API_URL solo vale en pruebas (CANAL_PRUEBAS=1), como en lanzar-cursor.sh y cursor-agente.js
@@ -142,6 +183,7 @@ for i in 1 2 3; do
   [ -s "$TMP/res.txt" ] && break; sleep 10
 done
 if [ ! -s "$TMP/res.txt" ]; then responder "Cursor (vía API): el agente $ID terminó pero no he podido leer su respuesta."; exit 0; fi
+fi   # fin del respaldo por API (CLI_OK != 1)
 [ "$(tr -d '[:space:]' < "$TMP/res.txt")" = "NADA" ] && { echo "Cursor: NADA"; exit 0; }
 cat > "$TMP/partir.js" <<'EOF_JS'
 const fs=require("fs"),path=require("path"),e=process.env,O=(f)=>path.join(e.OUT,f);
@@ -194,7 +236,7 @@ if(canalTxt){
   const para=git?e.QUIEN:([...new Set([...nombres(tags.filter((t)=>/^\[\s*lo hace/i.test(t)).join(" ")),...nombres((cab.match(/para:([^|]*)/i)||["",""])[1])])].join(", ")||"Coo");
   fs.writeFileSync(O("bloque.md"),[`<!-- para: ${para} | cc: JJ | responde-a: Slack (hilo «${linea(raiz)}») | id: ${id} | accion: ${git?"informa":"info"}${estado?` | estado: ${estado}`:""} -->`,
     git?`### Cursor · ${hoy} · HORA · [SLACK→CANAL] Respuesta a ${e.QUIEN} · «${raiz}»`:`### Cursor · ${hoy} · HORA · [SLACK→CANAL] Detalle técnico de su respuesta a Humano · «${raiz}»`,
-    `Hilo de Slack: ${url}`,``,canalTxt,``,pregunta?`**Para Humano:** ${pregunta}`:"",``,`— Cursor (vía API) ·`,``].join("\n"));
+    `Hilo de Slack: ${url}`,``,canalTxt,``,pregunta?`**Para Humano:** ${pregunta}`:"",``,`— Cursor (${e.VIA||"vía API"}) ·`,``].join("\n"));
   if(git){ let tapaV=(s)=>String(s).replace(/\S{20,}/g,"…");try{tapaV=require(path.join(e.AQUI_W,"tapar-secretos.js")).tapaSecretos}catch(x){}   // primero el valor del secreto, después la palabra
     const limpio=(s)=>tapaV(s,{largos:false}).replace(/(secret|password|token)/gi,"…");   // la nota despierta a quien preguntó; con «HUMANO:», avisa a Humano
     fs.writeFileSync(O("nota.txt"),[`para: ${e.QUIEN}`,...(pregunta?["@humano"]:[]),`Coinciden: respuesta de Cursor a lo que pidió ${e.QUIEN} en Slack («${limpio(raiz).slice(0,60)}»)`,
@@ -202,7 +244,7 @@ if(canalTxt){
 }
 EOF_JS
 MODO=slack; [ "$POR_GIT" = 1 ] && MODO=git
-if ! HILO_F="$TMP/hilo.json" RES="$TMP/res.txt" MODO="$MODO" QUIEN="$PARA_GIT" HILO="$HILO" CH="$CH" OUT="$TMP" AQUI_W="$(cygpath -w "$AQUI" 2>/dev/null || echo "$AQUI")" node "$TMP/partir.js"; then
+if ! VIA="$VIA" HILO_F="$TMP/hilo.json" RES="$TMP/res.txt" MODO="$MODO" QUIEN="$PARA_GIT" HILO="$HILO" CH="$CH" OUT="$TMP" AQUI_W="$(cygpath -w "$AQUI" 2>/dev/null || echo "$AQUI")" node "$TMP/partir.js"; then
   echo "partir.js ha fallado: a Slack van solo las 3 primeras líneas"
   head -n 3 "$TMP/res.txt" > "$TMP/slack.txt"; : > "$TMP/tag.txt"; rm -f "$TMP/bloque.md" "$TMP/nota.txt"
 fi
@@ -215,8 +257,8 @@ publica() { local prev rc; prev=$(cat "$EST" 2>/dev/null || true)
   case $rc in 0|7|10|11) return 0 ;; *) echo "publicar-canal.sh salió con $rc"; return 1 ;; esac; }
 OKG=0; AVISO=""
 if [ -s "$TMP/bloque.md" ]; then
-  MSGC="[skip ci] Canal: Cursor (vía API) responde a $QUIEN desde Slack"
-  [ "$POR_GIT" = 1 ] || MSGC="[skip ci] Canal: Cursor (vía API), detalle técnico de su respuesta a Humano en Slack"
+  MSGC="[skip ci] Canal: Cursor ($VIA) responde a $QUIEN desde Slack"
+  [ "$POR_GIT" = 1 ] || MSGC="[skip ci] Canal: Cursor ($VIA), detalle técnico de su respuesta a Humano en Slack"
   publica "$MSGC" && OKG=1 || { sleep "${CURSOR_REINTENTO_S:-15}"; publica "$MSGC" && OKG=1; }
   if [ "$OKG" = 0 ]; then
     GUARDA="$HOME/.canal-logs/cursor-sin-publicar-$(date +%Y%m%d-%H%M%S).md"; cp "$TMP/bloque.md" "$GUARDA"
@@ -234,7 +276,7 @@ elif [ -s "$TMP/bloque.md" ]; then
   else AVISO="📎 El detalle técnico no ha podido ir al canal git: queda guardado en este equipo."; fi
 fi
 # a Slack: firma, las líneas para Humano, el aviso del canal y, la última, la etiqueta de estado (sin salto final)
-PARTES=("*Cursor (vía API):*")
+PARTES=("*Cursor ($VIA):*")
 [ -s "$TMP/slack.txt" ] && PARTES+=("$(head -c 3300 "$TMP/slack.txt")")
 [ -n "$AVISO" ] && PARTES+=("$AVISO")
 [ -s "$TMP/tag.txt" ] && PARTES+=("$(cat "$TMP/tag.txt")")

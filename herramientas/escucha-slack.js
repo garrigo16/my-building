@@ -215,7 +215,7 @@ async function conectar() {
       log(`Cursor ya está en el hilo ${hilo} con su app: no lo lanzo por API`); return;
     }
     if (script === "atender-cursor-slack.sh") {   // sin saldo de API en este hilo (y sin un SI después): ya se avisó una vez; se espera
-      let no = null; try { no = require("./cursor-sin-saldo.js").bloqueoLog({ hilo }, LOGS); } catch (x) {}
+      let no = null; try { const CS = require("./cursor-sin-saldo.js"); if (!CS.hayCli()) no = CS.bloqueoLog({ hilo }, LOGS); } catch (x) {}   // con CLI no bloquea: solo el respaldo por API
       if (no) { log(`Cursor sin saldo de API en el hilo ${hilo} (ya avisado a las ${require("./cursor-sin-saldo.js").hhmm(no.t)}): no lo relanzo, se espera`); return; }
     }
     if (script !== "atender-grok.sh" && activos.has(clave)) {
