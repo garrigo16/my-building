@@ -126,7 +126,7 @@ async function conectar() {
     if (e.type === "message") { log(`evento message de ${e.user || e.bot_id} (${e.subtype || "normal"}) en ${e.channel}`); toqueOficina({}); }   // v506
     const hilo = e.thread_ts || e.ts;
     if (e.user === CURSOR) cursorNativo.set(hilo, Date.now());
-    const txtM = txt.replace(/[*_]*Enviado usando[*_]*\s*<@U[A-Z0-9]+>/gi, "");
+    const txtM = txt.replace(/[*_]*(?:Enviado usando|Sent using)[*_]*\s*<@U[A-Z0-9]+>/gi, "");
     const meNombra = txtM.includes(`<@${YO}>`);
     const nombraCursor = txtM.includes(`<@${CURSOR}>`);
     const normal = e.type === "message" && (!e.subtype || e.subtype === "thread_broadcast" || e.subtype === "bot_message");

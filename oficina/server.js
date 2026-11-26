@@ -568,7 +568,7 @@ function rotaLogs(dir = LOGS, extra = [path.join(HOME, ".canal-lanzamientos.log"
   return hecho;
 }
 const ms = (s) => { const t = Date.parse(s); return isNaN(t) ? 0 : t; };
-const tsMs = (ts) => Math.round(parseFloat(ts) * 1000);
+const tsMs = (ts) => Math.round(parseFloat(String(ts).replace(/^local-/, "")) * 1000);   // («local-…»: mensajes de Coo sin Slack, ver hilosLocales)
 // v252: ¿se despertó a esta IA para este hilo después de t? (Claude: lanzamiento; Cursor: arranque por API bueno; Coo: aviso
 // por webhook aceptado). Antes, la misma expresión copiada en tres sitios de analizar.
 const despertada = (L, hilo, ia, t) => (ia === "Claude" && ((L.lanzHilo || {})[hilo] || 0) > t)
@@ -701,8 +701,11 @@ function quien(m) {
   if (m.bot_id) return "Sistema";
   return m.user || "?";
 }
-const menciones = (t) => [...new Set([...(t || "").replace(/[*_]*Enviado usando[*_]*\s*<@U[A-Z0-9]+>/gi, "").matchAll(/<@(U[A-Z0-9]+)>/g)].map((x) => ID[x[1]]).filter(Boolean))];
-const EMOJI = { bell: "🔔", rocket: "🚀", warning: "⚠️", fire: "🔥", white_check_mark: "✅", heavy_check_mark: "✔️", x: "❌", eyes: "👀", memo: "📝",
+// El pie que Slack pone a lo enviado por una app: «Enviado usando @app» / «Sent using @app», con * o _ alrededor.
+const sinPieEnviado = (t) => String(t || "").replace(/[*_]*(?:Enviado usando|Sent using)[*_]*\s*<@U[A-Z0-9]+>/gi, "").replace(/\s+$/, "");
+const tienePieEnviado = (t) => /(?:Enviado usando|Sent using)[*_]*\s*<@U[A-Z0-9]+>/i.test(String(t || ""));
+const menciones = (t) => [...new Set([...sinPieEnviado(t).matchAll(/<@(U[A-Z0-9]+)>/g)].map((x) => ID[x[1]]).filter(Boolean))];
+const EMOJI = { bell: "🔔", new: "🆕", rocket: "🚀", warning: "⚠️", fire: "🔥", white_check_mark: "✅", heavy_check_mark: "✔️", x: "❌", eyes: "👀", memo: "📝",
   bug: "🐛", tada: "🎉", pushpin: "📌", red_circle: "🔴", large_green_circle: "🟢", zap: "⚡", table_tennis_paddle_and_ball: "🏓", ping_pong: "🏓",
   thumbsup: "👍", "+1": "👍", thumbsdown: "👎", "-1": "👎", ok_hand: "👌", pray: "🙏", clap: "👏", muscle: "💪", raised_hands: "🙌", wave: "👋",
   smile: "😄", joy: "😂", sweat_smile: "😅", wink: "😉", thinking_face: "🤔", heart: "❤️", no_entry_sign: "🚫", no_entry: "⛔",
@@ -724,6 +727,28 @@ function textoPlanoSin(t) {
     .replace(/<(https?:[^|>]+)\|([^>]+)>/g, "$2").replace(/<(https?:[^>]+)>/g, "$1")
     .replace(/[*`]/g, "").replace(/(^|[^\p{L}\p{N}_])_+(?=\S)/gu, "$1").replace(/(\S)_+(?=$|[^\p{L}\p{N}_])/gu, "$1")
     .replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+}
+// Mensajes locales de Coo (POST /api/coo/publicar con local:true): no van a Slack. Se guardan en ~/.oficina/coo-local.jsonl (fuera del repo),
+// una línea por mensaje { ts: "local-<seg>.<micro>", hilo: <ts de la raíz>, t, quien, texto }, y hilosLocales() los convierte en hilos como los de
+// Slack para analizar(). Un [te toca: …] sale en Te toca; un [hecho] posterior (o la respuesta de Humano) lo quita. Sin enlaces a Slack.
+const COO_LOCAL_F = path.join(HOME, ".oficina", "coo-local.jsonl");
+const esTsLocal = (x) => /^local-\d+\.\d+$/.test(String(x || ""));
+let localN = 0;
+const nuevoTsLocal = () => { const t = Date.now(); return { t, ts: "local-" + (t / 1000).toFixed(3) + String(++localN % 1000).padStart(3, "0") }; };
+function leeLocales(f = COO_LOCAL_F) {
+  let txt = ""; try { txt = fs.readFileSync(f, "utf8"); } catch (e) { return []; }
+  return txt.split(/\r?\n/).map((l) => { try { return l.trim() ? JSON.parse(l) : null; } catch (e) { return null; } }).filter((x) => x && esTsLocal(x.ts) && esTsLocal(x.hilo));
+}
+function guardaLocal({ hilo, quien = "Coo", texto }, f = COO_LOCAL_F) {
+  const { t, ts } = nuevoTsLocal(), e = { ts, hilo: hilo || ts, t, quien, texto };
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, JSON.stringify(e) + "\n");
+  return e;
+}
+function hilosLocales(entradas = leeLocales()) {
+  const por = new Map();
+  for (const e of entradas) { if (!por.has(e.hilo)) por.set(e.hilo, []); por.get(e.hilo).push(e); }
+  return [...por.entries()].map(([ts, es]) => ({ ts, msgs: es.sort((a, b) => a.t - b.t).map((e) => ({ ts: e.ts, quien: e.quien, texto: emojiSlack(e.texto), menc: [] })) }))
+    .filter((h) => h.msgs.length && h.msgs[0].ts === h.ts);
 }
 const enlace = (ts, raiz) => `${SLACK_WS}/archives/${CH}/p${ts.replace(".", "")}` + (raiz && raiz !== ts ? `?thread_ts=${raiz}&cid=${CH}` : "");
 function objetivoDe(t) { const m = textoPlano(t || "").match(/(?:🎯\s*)?Objetivo:\s*([^\n]+)/i); return m ? m[1].trim().slice(0, 220) : ""; }
@@ -836,7 +861,7 @@ async function leerSlack() {
     lote.forEach((r, k) => traidos.set(r.ts, res[k]));
   }
   const hiloDe = (r, msgs) => ({ ts: r.ts, msgs: msgs.map((m) => {
-      const q = quien(m), texto = emojiSlack(String(m.text || "").replace(/\s*[*_]*Enviado usando[*_]*\s*<@U[A-Z0-9]+>\s*$/i, ""));
+      const q = quien(m), texto = emojiSlack(sinPieEnviado(m.text));
       const pj = q === "Claude" && (texto.match(PRIV_J) || [])[1];
       return { ts: m.ts, quien: pj ? "Humano" : q, texto, menc: menciones(m.text), ...(pj ? { privJ: pj.trim() } : {}), ...(q === "Humano" && m.app_id === APP_OFICINA ? { ofi: true } : {}) };
     }) });
@@ -1841,7 +1866,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     const obj0 = objetivoDe(raiz.texto);
     const origen0 = (((raiz.texto || "").match(/(?:(?:📥|:inbox_tray:)\s*|^[ \t>*_]*)Origen:\**\s*([^\n·*]+)/m) || [])[1] || "").trim();
     let pendExterno = false;
-    const esJiraNuevo = /🆕\s*Nuevo de Jira/i.test(raiz.texto || "") && /^Jira/i.test(origen0);
+    const esJiraNuevo = /🆕\s*Nuevo de Jira/i.test(emojiSlack(raiz.texto || "")) && /^Jira/i.test(origen0);
   const claveJn = claveJira(tituloHilo(raiz.texto));
   const salJn = claveJn && typeof jiraSalidas === "object" && jiraSalidas && jiraSalidas[claveJn];
   if (esJiraNuevo && salJn) {
@@ -1893,7 +1918,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     const YA_SALIO = /\b(enviado|ha salido|sali[oó]|ya est[aá] enviado)\b/i;
     const cand = conv.filter((m) => tsMs(m.ts) > tJ0 && m.quien !== "Humano" && PIDE_GROK.test(m.texto || "")).pop();
     let permisoGrok = false, correoGrok = null;
-    const saleYa = (x) => { const s = textoPlano(x || "").replace(/\*?enviado usando\*?[^\n]*/gi, "");
+    const saleYa = (x) => { const s = sinPieEnviado(textoPlano(x || "")).replace(/\*?(?:enviado usando|sent using)\*?[^\n]*/gi, "");
       return YA_SALIO.test(s) && !/\b(no|a[uú]n no|todav[ií]a no)\s+(se\s+)?(ha\s+)?(salido|enviado)/i.test(s); };
     const yaSalio = cand && conv.some((m) => tsMs(m.ts) > tsMs(cand.ts) && m.quien !== "Humano" && !/Asunto:/i.test(m.texto || "")
       && (saleYa(m.texto) || (m.quien === cand.quien && (etiquetaDe(m) || {}).hecho)));
@@ -2143,7 +2168,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
       proyecto, tema: objetivoDe(raiz.texto) ? limpiaTitulo(tituloHilo(raiz.texto)) : temaDe(tituloHilo(raiz.texto), textoPlano(raiz.texto).slice(0, 400)),
       // quién ha pasado por la sala del tema en las últimas 3 h (para la vista por temas)
       participan: [...new Set(conv.filter((m) => ahora - tsMs(m.ts) < 3 * 3600e3 && IAS.includes(m.quien)).map((m) => m.quien))],
-      ts: h.ts, titulo: limpiaTitulo(tituloHilo(raiz.texto)), url: enlace(ult.ts, h.ts), estado, motivo, espera, enMarcha,
+      ts: h.ts, titulo: limpiaTitulo(tituloHilo(raiz.texto)), url: String(h.ts).startsWith("local-") ? "" : enlace(ult.ts, h.ts), estado, motivo, espera, enMarcha,
       trabajan: enMarcha.map((ia) => ({ ia, desde: (desdeT[h.ts] || {})[ia] || 0, arrancando: (arrancan[h.ts] || []).includes(ia),
         ...((porSenal[h.ts] || {})[ia] ? { senal: true, ult: porSenal[h.ts][ia] } : {}) })),
       sinSenal: sinSenal[h.ts] || [],
@@ -2151,7 +2176,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
       objetivo: objetivoDe(raiz.texto), origen: origen0,
       trae: ["Charla", "Gus"].includes(raiz.quien) ? raiz.quien : null, creado: tsMs(h.ts),
       ult: { quien: ultQuien, t: ultT, texto: String(ultTexto).slice(0, 260) }, n: conv.length,
-      msgs: conv.slice(-8).map((m) => ({ quien: m.quien, t: tsMs(m.ts), texto: textoPlano(m.texto).slice(0, 4000) })),
+      msgs: conv.slice(-8).map((m) => ({ quien: m.quien, t: tsMs(m.ts), texto: textoPlano(m.texto).slice(0, 4000), ...(m.ofi ? { ofi: true } : {}) })),
       // "desde": desde cuándo está en este estado = último mensaje (o el arranque del trabajo)
       desde: ultT,
     });
@@ -2442,7 +2467,7 @@ function analizar(hilosSlack, L, P, agentes, git, previos) {
     .concat(sueltas.map((x) => ({ tipo: "timbre", titulo: "Decisión del canal git (sin tema: ábrela)", quien: "canal", texto: x.texto, url: x.url, t: x.t, cruzado: [], opciones: [] })));
   // un mensaje de Coo nunca relanza a Coo (avisar-coo.sh); un [lo hace: Claude|Cursor] suyo sí despierta a esa IA
   const deCoo = new Set(hilosSlack.flatMap((h) => h.msgs.filter((m) => m.quien === "Coo").map((m) => m.ts)));
-  return { hilos, monis, deTi, frenosHora: L.lanz.length, relanzar: relanzar.filter((r) => !(r.ia === "Coo" && deCoo.has(r.ts))) };
+  return { hilos, monis, deTi, frenosHora: L.lanz.length, relanzar: relanzar.filter((r) => !String(r.ts).startsWith("local-") && !(r.ia === "Coo" && deCoo.has(r.ts))) };
 }
 
 // ---------- historial de la semana (v30): temas nuevos y mensajes por persona, los últimos 7 días ----------
@@ -2813,7 +2838,7 @@ async function refrescar() {
   else delete errores.turno;
   try {
     rend.fase = "analizar";
-    const a = analizar([...(ultimo.slack || []), ...slackViejos.map((h) => ({ ...h, viejo: true }))], L, ultimo.procesos, ultimo.cursor, ultimo.git);   // v540
+    const a = analizar([...(ultimo.slack || []), ...hilosLocales(), ...slackViejos.map((h) => ({ ...h, viejo: true }))], L, ultimo.procesos, ultimo.cursor, ultimo.git);   // v540
     rend.fase = "después de analizar";
     // v174: [lo hace: X] sin señal de arranque → se relanza una vez (solo con turno; necesita también los procesos leídos,
     // para no relanzar a un Claude que ya trabaja en el hilo)
@@ -3553,11 +3578,16 @@ function enviar(req, res) {
     const hilo = String(j.hilo || ""), texto = String(j.texto || "").trim();
     if (!texto || texto.length > 3000) return fin(400, { ok: false, error: "texto vacío o demasiado largo" });
     if (!(estado.hilos || []).some((h) => h.ts === hilo)) return fin(400, { ok: false, error: "hilo desconocido" });
+    if (esTsLocal(hilo)) {   // hilo local de Coo: la respuesta se queda en el almacén local, sin Slack
+      guardaLocal({ hilo, quien: "Humano", texto }); anota(`hilo ${hilo} respuesta local (${texto.length} car.)`);
+      setTimeout(() => { tic(true).catch(() => {}); }, 300);
+      return fin(200, { ok: true, local: true, url: "", despierta: [], aviso: "Respuesta guardada en la oficina (hilo local de Coo, sin Slack)." });
+    }
     const tok = tokenHumano();
     if (!tok) return fin(409, { ok: false, error: "falta el token en ~/.config/oficina-slack.env" });
     const t = textoConMenciones(texto);
     try {
-      const k = await slackPost({ channel: CH, thread_ts: hilo, text: t }, tok);
+      const k = await slackPost(payloadHumano({ channel: CH, thread_ts: hilo, text: t }, await botUserId()), tok);
       anota(`hilo ${hilo} ${k.ok ? "ok " + k.ts : "error " + k.error} (${texto.length} car.)`);
       if (!k.ok) return fin(502, { ok: false, error: "Slack: " + k.error });
       cacheReplies.delete(hilo); setTimeout(tic, 1500);
@@ -3637,7 +3667,7 @@ function crearTema(req, res) {
     if (!tok) return fin(409, { ok: false, error: "falta el token en ~/.config/oficina-slack.env" });
     const t = textoConMenciones(texto);
     try {
-      const k = await slackPost({ channel: CH, text: t }, tok);
+      const k = await slackPost(payloadHumano({ channel: CH, text: t }, await botUserId()), tok);
       anota(`tema nuevo «${titulo}» ${k.ok ? "ok " + k.ts : "error " + k.error}`);
       if (!k.ok) return fin(502, { ok: false, error: "Slack: " + k.error });
       const despierta = [];
@@ -3791,7 +3821,7 @@ async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: s
   const publicarFn = publicar || (async (texto) => {
     const tok = token !== undefined ? token : tokenHumano();
     if (!tok) return { ok: false, error: "sin token humano" };
-    return slackPost({ channel: CH, text: texto }, tok);
+    return slackPost(payloadHumano({ channel: CH, text: texto }, await botUserId()), tok);
   });
   let v; try { v = JSON.parse(fs.readFileSync(JIRA_F, "utf8")); } catch (e) { v = { desde: ahora - 3 * 3600e3, vistos: {}, asignadas: {} }; }
   let yo = v.yo, tz = v.tz;
@@ -4187,6 +4217,30 @@ async function scopesBot(tok) {
   scopesCache.set(k, { t: Date.now(), scopes });
   return scopes;
 }
+// Quién es el bot del Edificio (user_id de auth.test con SLACK_BOT_TOKEN), en memoria; "" si no se sabe.
+const botUserCache = { k: "", t: 0, id: "" };
+async function botUserId(tok = cfg().SLACK_BOT_TOKEN) {
+  if (!tok) return "";
+  const k = huellaTok(tok);
+  if (botUserCache.k === k && botUserCache.id && Date.now() - botUserCache.t < SCOPES_MS) return botUserCache.id;
+  try {
+    const r = await leeRed("https://slack.com/api/auth.test", { method: "POST", headers: { Authorization: "Bearer " + tok } }, 10e3);
+    const id = r.json && r.json.ok && /^U[A-Z0-9]+$/.test(r.json.user_id || "") ? r.json.user_id : "";
+    if (id) Object.assign(botUserCache, { k, t: Date.now(), id });
+    return id;
+  } catch (e) { return ""; }
+}
+// Lo que se publica con el token de Humano (xoxp): el texto y, debajo, el pie «Enviado usando @bot» en un bloque context, como el que
+// Slack enseña en lo enviado por una app. Sin bot conocido, o si el texto ya lleva el pie, sale solo el texto.
+function payloadHumano({ channel, thread_ts, text }, botUser) {
+  const t = String(text || "");
+  const base = { channel, text: t, ...(thread_ts ? { thread_ts } : {}) };
+  if (!botUser || !/^U[A-Z0-9]+$/.test(botUser) || tienePieEnviado(t)) return base;
+  const blocks = [];
+  for (let i = 0; i < t.length; i += 3000) blocks.push({ type: "section", text: { type: "mrkdwn", text: t.slice(i, i + 3000) } });
+  blocks.push({ type: "context", elements: [{ type: "mrkdwn", text: `*Enviado usando* <@${botUser}>` }] });
+  return { ...base, blocks };
+}
 async function permalinkDe(channel, ts) {
   try { return (await slack("chat.getPermalink", { channel, message_ts: ts })).permalink || ""; } catch (e) { return ""; }
 }
@@ -4195,6 +4249,24 @@ function payloadCoo({ channel, thread_ts, text }, scopes) {
   const t = textoConMenciones(String(text).trim());
   return { modo: custom ? "username" : "prefijo",
     payload: { channel, text: custom || esPrefijoCoo(t) ? t : "Coo: " + t, ...(thread_ts ? { thread_ts } : {}), ...(custom ? { username: NOMBRE_COO_BOT } : {}) } };
+}
+// Camino local, sin Slack: Coo, para que una pregunta llegue a Te toca, hace POST /api/coo/publicar con «Authorization: Bearer <clave>» y
+//   { "local": true, "text": "…\n[te toca: ¿…?]" }   (o destino: "oficina"; avisos: tipo:"aviso" o sin la etiqueta; tipo:"pregunta" añade la etiqueta)
+// → { ok, local: true, ts: "local-…", hilo, url: "" }. Para seguir en el mismo tema: thread_ts = el ts local. Un mensaje local con [hecho] (o la
+// respuesta de Humano en Te toca) lo resuelve. Sin "local" se publica en Slack como siempre. No necesita channel ni token de Slack.
+function cooLocal(j, dep, fin) {
+  const text = String(j.text || "").trim(), thread_ts = String(j.thread_ts || "").trim(), tipo = String(j.tipo || "").toLowerCase();
+  if (thread_ts && !esTsLocal(thread_ts)) return fin(400, { ok: false, error: "thread_ts local no válido (local-…)" });
+  if (!text || text.length > 12000) return fin(400, { ok: false, error: "text vacío o demasiado largo" });
+  let t = text;
+  if (tipo === "aviso") t = t.replace(/\[\s*te toca\b[^\]]*\]/gi, "").trim() || text;
+  else if (tipo === "pregunta" && !/\[\s*te toca\b/i.test(t)) t += "\n[te toca: " + t.split(/\n/)[0].replace(/\s+/g, " ").slice(0, 150) + "]";
+  const f = dep.localF || COO_LOCAL_F;
+  if (thread_ts && !leeLocales(f).some((x) => x.hilo === thread_ts)) return fin(400, { ok: false, error: "hilo local desconocido" });
+  let e; try { e = guardaLocal({ hilo: thread_ts, quien: "Coo", texto: t }, f); } catch (er) { return fin(500, { ok: false, error: limpiaErr(er.message) }); }
+  anota(`coo/publicar local ${e.hilo} ok ${e.ts} (${t.length} car.)`);
+  if (!PRUEBAS) setTimeout(() => { tic(true).catch(() => {}); }, 300);
+  fin(200, { ok: true, local: true, ts: e.ts, hilo: e.hilo, url: "" });
 }
 function cooPublicarRuta(req, res, dep = {}) {
   const fin = (code, o) => { res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" }); res.end(JSON.stringify(o)); };
@@ -4211,6 +4283,7 @@ function cooPublicarRuta(req, res, dep = {}) {
     if (grande) return;
     let j; try { j = JSON.parse(cuerpo); } catch (e) { return fin(400, { ok: false, error: "json roto" }); }
     if (!j || typeof j !== "object") return fin(400, { ok: false, error: "json roto" });
+    if (j.local === true || String(j.destino || "").toLowerCase() === "oficina") return cooLocal(j, dep, fin);
     const channel = String(j.channel || "").trim() || CH, thread_ts = String(j.thread_ts || "").trim(), text = String(j.text || "").trim();
     if (!/^[CGD][A-Z0-9]{4,}$/.test(channel)) return fin(400, { ok: false, error: "channel no válido" });
     if (thread_ts && !/^\d+\.\d+$/.test(thread_ts)) return fin(400, { ok: false, error: "thread_ts no válido" });
@@ -4316,6 +4389,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { tunelCoo, estadoConTunel, sirveEstatico,textoConMenciones, quien, esCooBot, cooPublicarRuta, payloadCoo, scopesBot, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { tunelCoo, estadoConTunel, sirveEstatico,textoConMenciones, quien, esCooBot, cooPublicarRuta, hilosLocales, leeLocales, guardaLocal, esTsLocal, payloadCoo, scopesBot, sinPieEnviado, payloadHumano, botUserId, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; }, setJiraSalidas: (o) => { jiraSalidas = o || {}; }, adfTexto, jiraFmtCorte, jiraTextoNuevo, claveJira, objetivoDe, tituloHilo, verErroresJira: () => errores.jira, resetJiraSinToken: () => { jiraSinTokenAviso = false; delete errores.jira; } };

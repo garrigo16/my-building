@@ -132,6 +132,15 @@ module.exports = async ({ prueba, igual, casa, C, T, setAhora, oficina }) => {
     igual([a.hilos[0].estado, a.hilos[0].caja], ["humano", "toca"], "pasa a te toca");
   });
 
+  await prueba("Slack guarda 🆕 como :new: y sigue siendo Nuevo (no Te toca)", () => {
+    const raiz = `*Hilo: ABC-9 · tema*\n🎯 Objetivo: revisar el ticket nuevo ABC-9 de Jira\n📥 Origen: Jira · Ana\n:new: Nuevo de Jira`;
+    igual(/🆕/.test(raiz), false, "el texto lleva el código, no el carácter");
+    const h0 = { ts: C.ts("10:00"), msgs: [C.m("10:00", "Humano", raiz)] };
+    const a = oficina("10:30", [h0]);
+    igual([a.hilos[0].estado, a.hilos[0].caja], ["nuevo", "nuevo"], "columna Nuevo");
+    igual(a.deTi.length, 0, "fuera de Te toca");
+  });
+
   await prueba("vencimiento 4 h pasa a humano", () => {
     const raiz = `*Hilo: ABC-2 · tema*\n🎯 Objetivo: revisar el ticket nuevo ABC-2 de Jira\n📥 Origen: Jira · Ana\n🆕 Nuevo de Jira`;
     const h0 = { ts: C.ts("10:00"), msgs: [C.m("10:00", "Humano", raiz)] };

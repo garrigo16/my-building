@@ -88,8 +88,88 @@ const casosServidor = async ({ prueba, igual }) => {
   });
 };
 
+// Camino local (local:true): sin Slack, el mensaje queda en un fichero y sale en el estado (Te toca o aviso).
+const casosLocal = async ({ prueba, igual, casa, C, oficina }) => {
+  console.log("Coo deja avisos y preguntas en la oficina sin Slack");
+  const tmp = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "coolocal-")), "coo-local.jsonl");
+  const h = { authorization: "Bearer " + CLAVE };
+  // entradas locales con la hora de las pruebas (el reloj de oficina() es fijo)
+  const ent = (hms, quien, texto, hilo) => ({ ts: "local-" + C.ts(hms), hilo: "local-" + C.ts(hilo || hms), t: C.T(hms), quien, texto });
+  const estadoDe = (es, hms = "10:05") => oficina(hms, S.hilosLocales(es));
+
+  await prueba("coo local: local:true (o destino:oficina) no llama a Slack, guarda y devuelve ts local sin permalink", async () => {
+    const posts = [], f = tmp(), dep = { ...depCon(["chat:write"], posts), localF: f };
+    for (const cuerpo of [{ local: true, text: "hola\n[te toca: ¿OK?]" }, { destino: "oficina", text: "aviso suelto" }]) {
+      const r = await llama(h, cuerpo, dep);
+      igual([r.code, r.j.ok, r.j.local, /^local-\d+\.\d+$/.test(r.j.ts), "permalink" in r.j, r.j.url], [200, true, true, true, false, ""], "respuesta local");
+    }
+    igual(posts.length, 0, "no publica en Slack");
+    const es = S.leeLocales(f);
+    igual([es.length, es[0].quien, es[0].texto], [2, "Coo", "hola\n[te toca: ¿OK?]"], "guardado");
+    const r2 = await llama(h, { local: true, text: "sigo", thread_ts: es[0].ts }, dep);
+    igual(S.leeLocales(f)[2].hilo, es[0].ts, "mismo hilo local");
+    igual(r2.j.hilo, es[0].ts, "devuelve el hilo");
+  });
+
+  await prueba("coo local: misma clave y mismas validaciones; no pide channel; thread_ts de Slack o local desconocido = 400", async () => {
+    const posts = [], f = tmp(), dep = { ...depCon(["chat:write"], posts), localF: f };
+    igual((await llama({}, { local: true, text: "x" }, dep)).code, 401, "sin clave");
+    igual((await llama({ authorization: "Bearer mala" }, { local: true, text: "x" }, dep)).code, 403, "clave mala");
+    igual((await llama(h, { local: true, text: "  " }, dep)).code, 400, "text vacío");
+    igual((await llama(h, "{roto", dep)).code, 400, "json roto");
+    igual((await llama(h, { local: true, text: "x", thread_ts: "1795540186.383009" }, dep)).code, 400, "thread_ts de Slack");
+    igual((await llama(h, { local: true, text: "x", thread_ts: "local-1.5" }, dep)).code, 400, "hilo local desconocido");
+    igual((await llama(h, { local: true, text: "x".repeat(12001) }, dep)).code, 400, "demasiado largo");
+    igual((await llama(h, { local: true, channel: "", text: "sin channel" }, { ...dep, cfg: { COO_WEBHOOK_KEY: CLAVE } })).code, 200, "sin channel ni token de Slack");
+    igual(posts.length, 0, "nada a Slack");
+    igual(S.leeLocales(f).length, 1, "solo se guardó el bueno");
+  });
+
+  await prueba("coo local: tipo pregunta añade [te toca], tipo aviso lo quita", async () => {
+    const f = tmp(), dep = { ...depCon(["chat:write"], []), localF: f };
+    await llama(h, { local: true, tipo: "pregunta", text: "¿Subo la PR?" }, dep);
+    await llama(h, { local: true, tipo: "aviso", text: "Ojo [te toca: algo]" }, dep);
+    const es = S.leeLocales(f);
+    casa(es[0].texto, /\[te toca: ¿Subo la PR\?\]/, "pregunta con etiqueta");
+    igual(/te toca/i.test(es[1].texto), false, "aviso sin etiqueta");
+  });
+
+  await prueba("coo local: un [te toca: …] local es estado humano / caja toca / deTi, sin enlace de Slack", () => {
+    const a = estadoDe([ent("10:00", "Coo", "Decisión pendiente de la PR\n[te toca: ¿Subo la PR 12?]")]);
+    const th = a.hilos[0];
+    igual([th.estado, th.caja, th.ult.quien], ["humano", "toca", "Coo"], "estado");
+    igual(a.deTi.length, 1, "en Te toca");
+    igual([a.deTi[0].url, th.url], ["", ""], "sin enlaces a Slack");
+    casa(a.deTi[0].pideOk && a.deTi[0].pideOk.pregunta, /Subo la PR 12/, "pideOk");
+    igual(a.relanzar.length, 0, "no relanza nada");
+  });
+
+  await prueba("coo local: un aviso (sin etiqueta) sale en los hilos pero no en deTi", () => {
+    const a = estadoDe([ent("10:00", "Coo", "Aviso: terminé la revisión de la PR 12")]);
+    igual(a.hilos.length, 1, "visible");
+    igual(a.hilos[0].estado === "humano", false, "no pide nada");
+    igual(a.deTi.length, 0, "fuera de Te toca");
+  });
+
+  await prueba("coo local: un [hecho] local, o la respuesta de Humano, lo saca de deTi", () => {
+    const base = ent("10:00", "Coo", "Decisión pendiente\n[te toca: ¿Subo la PR 12?]");
+    igual(estadoDe([base]).deTi.length, 1, "antes: pendiente");
+    const a = estadoDe([base, ent("10:03", "Coo", "Ya lo resolví [hecho]", "10:00")]);
+    igual(a.deTi.length, 0, "[hecho] lo cierra");
+    const b = estadoDe([base, ent("10:03", "Humano", "Sí, súbela", "10:00")]);
+    igual(b.deTi.length, 0, "la respuesta de Humano lo cierra");
+    igual(b.hilos[0].url, "", "sigue sin enlace");
+  });
+
+  await prueba("coo local: tsMs entiende «local-…» y los ts de Slack no cambian", () => {
+    igual(S.esTsLocal("local-1795540186.383009"), true, "local");
+    igual(S.esTsLocal("1795540186.383009"), false, "slack");
+  });
+};
+
 module.exports = async (ay) => {
   await casosServidor(ay);
+  await casosLocal(ay);
   const { prueba, igual } = ay;
   await prueba("escucha: Coo por el bot del Edificio no despierta a nadie salvo [lo hace: Claude|Cursor] y nunca avisar-coo.sh", async () => {
     const T = fs.mkdtempSync(path.join(os.tmpdir(), "esbot-")), H = path.join(T, "herr"), HOME = path.join(T, "home");
