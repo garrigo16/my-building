@@ -1,14 +1,20 @@
 {
  "notas": {},
  "recordatorios": [],
- "ver": 6,
+ "ver": 7,
  "ajustes": {
   "cumple": "",
   "aniversario": "",
   "extra": [],
   "plantillas": null,
   "fijados": [],
-  "pausas": {},
+  "pausas": {
+   "SFEI-1216 · [CORE] - Crear TAB en cuentas 'Análisis de ventas'": {
+    "t": 1795689064749,
+    "motivo": "Falta info ticket y funcional",
+    "hasta": 1802242800000
+   }
+  },
   "cerrados": {
    "Revisar continuación SFEI-1294": 1795623185782
   },
