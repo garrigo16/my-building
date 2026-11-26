@@ -3792,6 +3792,35 @@ function jiraApuntaSalida(v, clave, m, t, JIRA_F) {
   jiraSalidas = v.salidas;
   jiraGuardaV(JIRA_F, v);
 }
+// Estados en Jira ligados al tablero (pedido de Humano 26/11): al salir el tema de «Nuevo» -> «En curso»; al cerrarse con «hecho» -> «En QA».
+// Solo temas con clave de Jira que esta función vio EN «Nuevo» (los que ya estaban en marcha no se tocan). Una vez por clave y paso.
+// JIRA_PRUEBA=1: no escribe, solo anota.
+async function jiraSincronizaEstados({ hilos, claves, api, v, ahora }) {
+  v.trans = v.trans || {};
+  const porClave = new Map();
+  for (const h of hilos || []) { const k = claveJira(h.titulo); if (k && claves.includes(k) && !porClave.has(k)) porClave.set(k, h); }
+  for (const [k, h] of porClave) {
+    const t = v.trans[k];
+    if (!t) { v.trans[k] = { visto: h.caja === "nuevo" ? "nuevo" : "fuera", t: ahora }; continue; }
+    if (t.visto !== "nuevo") continue;
+    const hecho = h.caja === "cerrado" && /^✔ cerrado en el hilo/.test(h.motivo || "");
+    const quiere = hecho ? "qa" : (h.caja !== "nuevo" && h.caja !== "cerrado" ? "curso" : null);
+    if (!quiere || t[quiere]) continue;
+    if (quiere === "qa" && !t.curso) { t.curso = -1; }   // pasó de Nuevo a hecho sin ver «en curso»: no se fuerza En curso
+    const ri = await api("/rest/api/3/issue/" + encodeURIComponent(k) + "?fields=status");
+    const st = (ri.fields && ri.fields.status) || {}, cat = st.statusCategory && st.statusCategory.key, nom = String(st.name || "");
+    const ya = quiere === "curso" ? cat !== "new" : (cat === "done" || /qa/i.test(nom));
+    if (ya) { t[quiere] = ahora; continue; }
+    const tr = await api("/rest/api/3/issue/" + encodeURIComponent(k) + "/transitions");
+    const re = quiere === "curso" ? /^en curso$/i : /^en qa$/i;
+    const dest = ((tr && tr.transitions) || []).find((x) => re.test(String((x.to && x.to.name) || x.name || "").trim()));
+    if (!dest) { t[quiere] = ahora; anota(`JIRA ${k}: no hay transición a «${quiere === "curso" ? "En curso" : "En QA"}» desde «${nom}»; no se cambia`); continue; }
+    if (process.env.JIRA_PRUEBA) { anota(`JIRA (prueba) ${k}: pasaría de «${nom}» a «${dest.to.name}»`); t[quiere] = ahora; continue; }
+    await api("/rest/api/3/issue/" + encodeURIComponent(k) + "/transitions", { transition: { id: dest.id } });
+    t[quiere] = ahora;
+    anota(`JIRA ${k}: «${nom}» -> «${dest.to.name}»`);
+  }
+}
 async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: site = JIRA_SITE, fetch: fetchFn = fetch, api, publicar, ahora: ahoraFn, token, hilos: hilosIn, conTurno: conTurnoFn = conTurno, cfgJira } = {}) {
   if (!auth) {
     if (!jiraSinTokenAviso) { jiraSinTokenAviso = true; errores.jira = "Jira sin token: no se crean temas Nuevo"; }
@@ -3816,6 +3845,7 @@ async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: s
     if (!r) r = await pide(site);
     if (r.status === 401 || r.status === 403) throw new Error("Jira " + r.status);
     if (!r.ok) throw new Error("Jira " + r.status);
+    if (r.status === 204) return {};
     return r.json();
   });
   const publicarFn = publicar || (async (texto) => {
@@ -3933,6 +3963,7 @@ async function jiraVigia({ JIRA_F = JIRA_F_REAL, auth = jiraCred(), JIRA_SITE: s
   }
   jiraContestados = v.contestados;
   jiraSalidas = v.salidas;
+  try { await jiraSincronizaEstados({ hilos, claves, api: apiReal, v, ahora }); } catch (e) { anota("JIRA estados: " + limpiaErr(e.message)); }
   const sinFecha = [...new Set(hilos.flatMap((h) => String(h.titulo || "").match(/\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b/g) || []))].filter((k) => !(v.creadas || {})[k]).slice(0, 5);
   for (const k of sinFecha) {
     let t = -1; try { const ri = await apiReal(`/rest/api/3/issue/${encodeURIComponent(k)}?fields=created`); t = Date.parse(ri && ri.fields && ri.fields.created) || -1; } catch (e) {}
@@ -4389,6 +4420,6 @@ if (servidor) servidor.on("error", (e) => {
 if (servidor) { if (RELEVO) pideRelevo().then((ok) => { if (ok) relevoDado = Date.now(); abrePuerto(); }); else abrePuerto(); }
 
 // v159: para los tests de regresión (oficina/pruebas/correr.js)
-if (PRUEBAS) module.exports = { tunelCoo, estadoConTunel, sirveEstatico,textoConMenciones, quien, esCooBot, cooPublicarRuta, hilosLocales, leeLocales, guardaLocal, esTsLocal, payloadCoo, scopesBot, sinPieEnviado, payloadHumano, botUserId, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
+if (PRUEBAS) module.exports = { jiraSincronizaEstados, tunelCoo, estadoConTunel, sirveEstatico,textoConMenciones, quien, esCooBot, cooPublicarRuta, hilosLocales, leeLocales, guardaLocal, esTsLocal, payloadCoo, scopesBot, sinPieEnviado, payloadHumano, botUserId, claveIgual, APP_OFICINA,limpiaErr,cuerpoRelevo, heredaRelevo, verCodigo: () => codigo, UPD, upd, relevo, estadoUpdate, motivoArranque, estrena, repasaCodigo, verEstado: () => estado, diarioOtro, diarioHttp, informeHttp, limpiaTitulo, apuntesLimpios, leeApuntes, tituloHilo, temaDe, CANALES, REPO, horasTrabajo, enHorario, sumaHorasTrabajo, proximo805, leeOps, entreIAs, vivasEntre, cuentaCanalDia, canalHoy, ponAlDia, run, esGitRed, gitRed, analizar, bloquesDeTexto, horaBloque, opcionesDe, botonesDe, esTrabajo, gastoSesiones, setConsumo: (c) => { consumo = c; }, conTurno, sinTurno, setTurno: (t) => { turno = t; }, asuntoClaves, temasDesde, leerSemana, raices: () => raicesSemana, relanzaPendientes, sinRelanzados: () => { relanzados = []; }, lanzarCursorComoHumano, setSinSaldo: (f) => { cursorSinSaldo = f; sinSaldoAnotado.clear(); }, lineas, rotaLogs, jiraVigia, jiraCloudId, sinJiraCloudIds: () => jiraCloudIds.clear(), cambioOficina, DEP_OFICINA, DEP_ESCUCHA, leerConsumo, verConsumo: () => consumo, anotados, prVigia, prCada, prs: () => prEstado, slackPost, cfg, jiraCred, huellaEstado, subeSobra, FICH_ESTADO, fetchConTope, authClaude, estadoEscucha, vigilaEscucha, latidosDe, ordenLatido, turnoHuerfano, notaLatido, desdeTurno, leerTurno, verTurno: () => turno, verErrores: () => ({ ...errores }), sinLatido: () => { latidoT = 0; }, vigiaParado, parseProcesos, hacenFaltaProcesos, miraWorktrees, avisoSucio, sesionesPorHilo, noEnviadas, claudesColgados, transcriptDe, miraCodigo, avisoCodigo, ritmoDe, leerLogs, leerSlack, leerGit, leerProcesos, etiquetaDe, okParaClaude, esOkHumano, esCortesia, llanoS, llevarDe, quePasaDe, borradorDe, borradorCitado, chatDe, verViejos: () => slackViejos, tareaManual, setOrgs: (xs) => { orgsAqui = new Set(xs); }, llevaASlack, resumenRendimiento, anotaRetraso, sinEstrenarAhora, cuerpoEstado, marcaArranque, marcaFin, enMovimiento, guionRelanzar, relacionadosDe, escribeRelacionados, quizaInforme, gastoSesionesCada, avisoGit, precargaLogs, sueltaPrecarga, lineasAsync, notaLento, vigilaFsSync, refrescaConfig, pideRefresco, avisaOyentes, verArrancando: () => arrancando,
   leeRed, leeFuente, ESPERA_FUENTE, notaPaso, resumenFuentes, trasExcepcion, tic, leerCursor, slack, setRefrescar: (f) => { refrescarDe = f; ultimoRefresco = 0; corriendo = false; },
   COORD, leeDelegados, leeJuntados, leeEnEllo, mandaEnEllo, enElloRuta, HOSTS, apuntaDelegado, coordinadores, delegarRuta, juntarRuta, trasCursor, cursorApagado, quizaCalendario, sinCalendario: () => { calT = 0; calEnCurso = false; reuniones = null; delete errores.calendario; }, verReuniones: () => reuniones, CLAVE, TEXTO_EN_ELLO, setPR: (o) => { prEstado = o || {}; }, setJira: (o) => { jiraContestados = o; }, setJiraCreadas: (o) => { jiraCreadas = o; }, setJiraSalidas: (o) => { jiraSalidas = o || {}; }, adfTexto, jiraFmtCorte, jiraTextoNuevo, claveJira, objetivoDe, tituloHilo, verErroresJira: () => errores.jira, resetJiraSinToken: () => { jiraSinTokenAviso = false; delete errores.jira; } };
