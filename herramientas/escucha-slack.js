@@ -122,7 +122,13 @@ async function conectar() {
     const YO = c.SLACK_CLAUDE_ID || "UCLAUDE0001";
     const COO = c.SLACK_COO_ID || "UCOO0000001", CURSOR = c.SLACK_CURSOR_ID || "UCURSOR0001";
     const IAS = { [COO]: "Coo", [CURSOR]: "Cursor" };
-    const txt = e.text || "";
+    // Firma de autor del bot del Edificio («*Claude:*», «*Cursor (vía CLI):*»; ver responder-slack.sh): es un mensaje de Claude/Cursor, no una
+    // llamada a esa IA. Se quita la cabecera del texto antes de mirar a quién nombra (si no, «Claude:» al principio casaría con @claude y la
+    // respuesta firmada de Claude se relanzaría a sí misma).
+    const RE_FIRMA_IA = /^\s*[*_]*(Claude|Cursor)[*_]*\s*(?:\([^)]*\))?\s*[*_]*\s*:[*_]*[ \t]*\n?/;
+    const txtCrudo = e.text || "";
+    const firmaIA = e.user === c.SLACK_HUMANO_ID ? "" : (!!(e.bot_id || e.app_id) || e.user === COO || e.user === YO || e.user === CURSOR) ? ((txtCrudo.match(RE_FIRMA_IA) || [])[1] || "") : "";
+    const txt = firmaIA ? txtCrudo.replace(RE_FIRMA_IA, "") : txtCrudo;
     if (e.type === "message") { log(`evento message de ${e.user || e.bot_id} (${e.subtype || "normal"}) en ${e.channel}`); toqueOficina({}); }   // v506
     const hilo = e.thread_ts || e.ts;
     if (e.user === CURSOR) cursorNativo.set(hilo, Date.now());
@@ -186,7 +192,7 @@ async function conectar() {
     if (haceCursor) lanzar(e, "atender-cursor-slack.sh", "Coo", txt);
     if (normal && (e.user === YO || e.user === CURSOR) && haceIA(txtM, "coo") && !vistos.has(`coo:${e.ts}`) && !yaRelanzado(hilo, e.ts)) {
       vistos.add(`coo:${e.ts}`);
-      const de = e.user === CURSOR || /^\s*[*_]*Cursor \(v[ií]a API\)/.test(txtM) ? "Cursor" : "Claude";
+      const de = e.user === CURSOR || firmaIA === "Cursor" || /^\s*[*_]*Cursor \(v[ií]a API\)/.test(txtM) ? "Cursor" : "Claude";
       log(`${de} deja [lo hace: Coo] en el hilo ${hilo}: despierto a Coo por webhook`);
       spawn(BASH, [path.join(AQUI, "avisar-coo.sh"), e.channel, hilo, de, e.ts], { detached: true, stdio: "ignore", windowsHide: true }).unref();
       toqueOficina({ hilo, ia: "Coo" });   // v506

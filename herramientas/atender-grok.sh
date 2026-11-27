@@ -24,7 +24,7 @@ ENC=$(mktemp); J="$J" node -e 'const j=JSON.parse(require("fs").readFileSync(pro
 rm -f "$J"
 R=$(mktemp)
 trap 'rm -f "$ENC" "${NOTA:-}" "$R"' EXIT   # v330: también al salir por error (si Grok no arrancaba, quedaban en %TEMP%)
-contestar() { printf '%s' "$1" > "$R"; bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$R" >/dev/null 2>&1 || true; }
+contestar() { printf '%s' "$1" > "$R"; AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$R" >/dev/null 2>&1 || true; }
 
 bash "$AQUI/responder-slack.sh" --reaccion "$CH" "$TS" eyes >/dev/null 2>&1 || true
 timeout 90 git -C "$WT" -c gc.auto=0 fetch -q origin "+refs/heads/$RAMA:refs/remotes/origin/$RAMA" || true

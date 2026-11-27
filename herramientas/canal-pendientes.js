@@ -2,7 +2,7 @@
 //   --base-min: minutos desde la última pasada de este equipo (sin él, o -1: no hay, y se aplica también el corte de 3 h).
 //   <f>: el fichero del canal en el tip, en la última pasada (base) y hace 3 h (lim).   --seco: dice qué haría y no toca nada.
 "use strict";
-const fs = require("fs"), path = require("path"), os = require("os"), { spawnSync } = require("child_process");
+const fs = require("fs"), path = require("path"), os = require("os"), { spawnSync, spawn } = require("child_process");
 const canal = require("./canal-bloques.js");
 
 const AUTORES = ["Coo", "Grok", "Criba"];
@@ -86,7 +86,7 @@ function ejecuta(r, ctx) {
     const txt = nota(ia, xs, ctx);
     if (ctx.seco) { dice.push(`DESPERTARÍA a ${ia} (${xs.map((x) => x.tipo).join(", ")}) con esta nota:\n${txt.trimEnd()}`); continue; }
     const f = path.join(os.tmpdir(), `vigia-nota-${ia}-${process.pid}.txt`); fs.writeFileSync(f, txt);
-    let rc = 99; try { rc = ctx.lanzar(ia, f); } finally { try { fs.unlinkSync(f); } catch (e) {} }
+    let rc = 99; try { rc = ctx.lanzar(ia, f, xs.map((x) => x.b)); } finally { try { fs.unlinkSync(f); } catch (e) {} }
     for (const x of xs) {
       const prev = est[x.k] || {};
       if (rc === 0) { est[x.k] = { clave: x.b.clave, ia, tit: x.b.tit.slice(0, 160), de: x.b.de, n: (prev.n || 0) + 1, t: ahora, t0: prev.t0 || ahora, desde: ctx.desde }; apunta(x.tipo, ia, x.b); }
@@ -97,6 +97,29 @@ function ejecuta(r, ctx) {
   return { lineas, dice };
 }
 
+
+// ¿El encargo pide IMPLEMENTAR o VALIDAR (deploy, checkOnly, tests en un org, aplicar un diff…)? Eso necesita sf: lo atiende
+// atender-slack.sh (PowerShell, escrituras en org bloqueadas hasta el OK de Humano), no lanzar-claude.sh (sin PowerShell ni sf).
+// Lectura, informes («deploy report») y recados de solo publicar en el canal siguen yendo a lanzar-claude.sh.
+const IMPLEMENTA = new RegExp([
+  "implement", "check-?only", "check only", "validaci[oó]n", "\\bvalida(r|rlo|rla)?\\b", "validad", "desplieg", "desplegar", "deploy(?!\\s*-?\\s*reports?)",
+  "run ?(specified|local)tests", "\\bsf (project )?(deploy|apex)", "aplic\\w+\\s+(el |este |ese |un |el siguiente )?(diff|parche|patch)",
+  "correcci[oó]n de(l| los)? tests?", "corregir (el |los )?tests?", "(arregl\\w+|fix\\w*) (el |los )?tests?",
+  "tests? (en|del|de|contra) (el |la )?(org|sandbox|MIKIDEV|QA|UAT|DEV\\w*)", "(lanz\\w+|ejecut\\w+|pas\\w+|corr\\w+) (los )?tests? (en|del|de|contra)",
+].join("|"), "i");
+const pideImplementarOValidar = (txt) => IMPLEMENTA.test(String(txt || "").normalize("NFC"));
+const idsDe = (bs) => [...new Set((bs || []).map((b) => String(b.id || b.tit || "").replace(/[,\r\n]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 110)).filter(Boolean))];
+// el JSON que espera atender-slack.sh (channel, ts, thread_ts, quien, text, oficina). quien NO es Humano: las escrituras en org
+// siguen bloqueadas hasta su OK. hilo: el del tema si lo hay; si no, el del timbre. Sin hilo → null (se usa lanzar-claude.sh).
+function jsonAtender({ nota, bloques, hilo, canal, ahora }) {
+  if (!hilo) return null;
+  const aut = (bloques || []).map((b) => b.de).find((d) => d && d !== "Claude");
+  const n = ahora || Date.now(), t = Math.floor(n / 1000), us = String(n % 1000).padStart(3, "0") + "000";
+  const ids = idsDe(bloques);
+  return { channel: canal || "CCANAL00001", ts: `${t}.${us}`, thread_ts: hilo, quien: aut || "Coo", oficina: true,
+    text: "(Encargo del canal git, no de Humano: las escrituras en org siguen bloqueadas hasta su OK; si hace falta escribir, pídelo con «¿Doy el OK a …?».)\n"
+      + nota + (ids.length ? "\nBloques: " + ids.join(", ") : "") };
+}
 
 // Un Claude del canal está ocupado solo si su proceso sigue vivo (claude.exe -p de claude-code).
 // No vale la antigüedad del log claude-YYYYMMDD-HHMMSS-*.log: si ya terminó, el siguiente bloque no debe esperar 25-30 min.
@@ -134,7 +157,7 @@ function claudeOcupada({ ahora = Date.now(), procesos } = {}) {
   return t || 0;
 }
 
-module.exports = { limpio, decide, ejecuta, nota, viejosPara, AUTORES, MAX_BLOQUES, RELANZA_MIN, claudeOcupada, esClaudeHeadless };
+module.exports = { pideImplementarOValidar, idsDe, jsonAtender, limpio, decide, ejecuta, nota, viejosPara, AUTORES, MAX_BLOQUES, RELANZA_MIN, claudeOcupada, esClaudeHeadless };
 
 if (require.main === module) {
   const arg = (n) => { const i = process.argv.indexOf("--" + n); return i > 0 ? process.argv[i + 1] : ""; };
@@ -149,7 +172,7 @@ if (require.main === module) {
     const m = l.match(/^(\S+) SI canal (\S+)/); const t = m ? Date.parse(m[1]) : 0;
     if (m && m[2] === can && ahora - t < 30 * 60e3) ocupadas.Cursor = Math.max(ocupadas.Cursor || 0, t);
   }
-  const tClaude = claudeOcupada({ ahora });
+  const tClaude = process.env.CANAL_PRUEBAS === "1" ? 0 : claudeOcupada({ ahora });   // (en pruebas no se miran los procesos reales del equipo)
   if (tClaude) ocupadas.Claude = tClaude;
   for (const l of lee(path.join(LOGS, "avisar-coo.log")).split(/\r?\n/).slice(-200)) {
     const m = l.match(/^(\S+) webhook de Coo \(hilo [\d.-]+, de el canal git \((\w+), sha [^)]*\)\): http (\d+)/); const t = m ? Date.parse(m[1]) : 0;
@@ -160,8 +183,22 @@ if (require.main === module) {
   const r = decide({ tip: lee(arg("tip")), viejos: viejosPara(lee(arg("base")), lee(arg("lim")), baseMin), estado, ahora, ocupadas, sinSaldo });
   const AQUI = process.env.VIGIA_LANZADORES || __dirname;
   const BASH = process.env.CANAL_BASH || "bash";
-  const lanzar = (ia, f) => {
-    if (ia === "Claude") return spawnSync(BASH, [path.join(AQUI, "lanzar-claude.sh"), can, f, arg("sha"), arg("desde")], { stdio: "ignore", timeout: 120e3 }).status ?? 98;
+  const sinSlack = process.env.CANAL_PRUEBAS === "1" && !process.env.SLACK_API_URL;   // en pruebas no sale nada a Slack
+  const lanzar = (ia, f, bloques) => {
+    if (ia === "Claude") {
+      const ids = idsDe(bloques).join(",");
+      const env = { ...process.env, ...(ids ? { BLOQUES: ids } : {}), ...(sinSlack ? { CANAL_SIN_SLACK: "1" } : {}) };
+      const hilo = lee(path.join(LOGS, "timbre-hilo.txt")).trim();
+      const texto = [lee(f), ...(bloques || []).map((b) => b.tit + "\n" + b.cuerpo)].join("\n");
+      const j = pideImplementarOValidar(texto) ? jsonAtender({ nota: lee(f), bloques, hilo, canal: process.env.SLACK_CANAL_ID, ahora: Date.now() }) : null;
+      if (j) {   // implementar / validar: atender-slack.sh (con PowerShell y sf; escrituras en org solo con el OK de Humano)
+        // desacoplado, como lanzar-claude.sh: atender-slack.sh espera a Claude y puede tardar minutos (él mismo borra el JSON al leerlo)
+        const fj = path.join(os.tmpdir(), `vigia-atender-${process.pid}-${Date.now()}.json`); fs.writeFileSync(fj, JSON.stringify(j));
+        try { const p = spawn(BASH, [path.join(AQUI, "atender-slack.sh"), fj], { detached: true, stdio: "ignore", env, windowsHide: true }); p.on("error", () => {}); p.unref(); return p.pid ? 0 : 98; }
+        catch (e) { return 98; }
+      }
+      return spawnSync(BASH, [path.join(AQUI, "lanzar-claude.sh"), can, f, arg("sha"), arg("desde")], { stdio: "ignore", timeout: 120e3, env }).status ?? 98;
+    }
     if (ia === "Cursor") return spawnSync(BASH, [path.join(AQUI, "lanzar-cursor.sh"), can, f, arg("sha"), arg("desde")], { stdio: "ignore", timeout: 240e3 }).status ?? 98;
     if (ia === "Codex") return spawnSync(BASH, [path.join(AQUI, "lanzar-codex.sh"), can, f, arg("sha"), arg("desde")], { stdio: "ignore", timeout: 120e3 }).status ?? 98;
     if (ia === "Coo") {   // Coo no tiene lanzador: su routine, por el hilo del timbre (como timbre.sh)

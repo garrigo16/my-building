@@ -22,7 +22,7 @@ a_humano() {
   case "$M" in freno*) M="ya se le había avisado varias veces en la última hora";; esac
   printf '<@%s> %s le ha pedido algo a Coo en este hilo y no he podido despertarlo (%s). Cuando puedas, menciónalo tú.' \
     "${SLACK_HUMANO_ID:?}" "${Q^}" "$M" > "$F"
-  bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$F"; rm -f "$F"
+  AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$F"; rm -f "$F"
 }
 COO_WEBHOOK_URL=${COO_WEBHOOK_URL:-${GROK_WEBHOOK_URL:-}}; COO_WEBHOOK_KEY=${COO_WEBHOOK_KEY:-${GROK_WEBHOOK_KEY:-}}
 if [ -z "${COO_WEBHOOK_URL:-}" ] || [ -z "${COO_WEBHOOK_KEY:-}" ]; then a_humano "no hay webhook de Coo configurado"; exit 0; fi

@@ -25,7 +25,7 @@ if printf '%s\n' "$NT" | grep -qiE '^@humano([^a-z0-9_]|$)' && [ "${LLEVAR_A_SLA
   LINEA="<@${SLACK_HUMANO_ID}> decisión tuya: ${OKJL:-mira el bloque}"$'\n'"_${LINEA}_"
 fi
 F=$(mktemp); printf '%s' "$LINEA" > "$F"
-bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$F" >/dev/null; RC=$?; rm -f "$F"
+AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$F" >/dev/null; RC=$?; rm -f "$F"
 echo "$(date -Is) timbre ($CANAL ${SHA:0:10}) para: ${PARA:-?} rc=$RC" >> "$L/timbre.log"
 # Coo no tiene lanzador propio: si el bloque es para Coo, se le despierta por su routine con este hilo.
 if printf '%s' "$PARA" | grep -qi 'coo'; then

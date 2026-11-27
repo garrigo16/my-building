@@ -154,8 +154,30 @@ if [ $SECO = 1 ]; then echo "AVISARÍA y abriría un Claude con esta nota:"; cat
 
 log "NUEVO: $RESUMEN (sha ${SHA:0:10})"
 bash "$AQUI/timbre.sh" "${CANAL2_NOMBRE:-proyecto}" "$NOTA" "$SHA" >/dev/null 2>>"$LOG" || log "timbre falló (rc=$?)"
-OUT=$(bash "$AQUI/lanzar-claude.sh" "${CANAL2_NOMBRE:-proyecto}" "$NOTA" "$SHA" "$DESDE" 2>&1); RC=$?
-log "lanzar-claude rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+# ids de los bloques que originaron el despertar: lanzar-claude.sh / atender-slack.sh los leen aunque queden fuera de DESDE..SHA
+BLOQUES=$(printf '%s\n' "$NUEVOS" | cut -f1 | grep -v '^$' | tr '\n,' ' ' | sed 's/  */ /g; s/^ //; s/ $//; s/ /,/g'); export BLOQUES
+[ "${CANAL_PRUEBAS:-0}" = 1 ] && [ -z "${SLACK_API_URL:-}" ] && export CANAL_SIN_SLACK=1   # en pruebas no sale nada a Slack
+# implementar / validar (deploy, checkOnly, tests en un org, aplicar un diff…) necesita sf: va a atender-slack.sh, con quien != Humano
+# (las escrituras en org siguen bloqueadas hasta el OK). Lectura y recados de publicar siguen yendo a lanzar-claude.sh.
+JATE=$(mktemp); ATENDER=0
+if NOTA_F="$NOTA" NUEVOS_T="$NUEVOS" HILOF="$L/timbre-hilo.txt" JSON_F="$JATE" CANAL_ID="${SLACK_CANAL_ID:-}" node -e '
+  const fs = require("fs"), e = process.env, P = require(require("path").join(process.argv[1], "canal-pendientes.js"));
+  const lee = (f) => { try { return fs.readFileSync(f, "utf8"); } catch (x) { return ""; } };
+  const bs = e.NUEVOS_T.split("\n").filter(Boolean).map((l) => { const c = l.split("\t"); return { id: c[0], tit: c[4] || "", cuerpo: "", de: "" }; });
+  const nota = lee(e.NOTA_F), hilo = lee(e.HILOF).trim();
+  if (!P.pideImplementarOValidar(nota + "\n" + bs.map((b) => b.tit).join("\n"))) process.exit(1);
+  const j = P.jsonAtender({ nota, bloques: bs, hilo, canal: e.CANAL_ID, ahora: Date.now() });
+  if (!j) process.exit(1);
+  fs.writeFileSync(e.JSON_F, JSON.stringify(j));' "$AQUI" 2>>"$LOG"; then ATENDER=1; fi
+if [ $ATENDER = 1 ]; then
+  nohup bash "$AQUI/atender-slack.sh" "$JATE" >/dev/null 2>&1 &
+  RC=0; OUT="atender-slack.sh (implementar/validar) lanzado con BLOQUES=$BLOQUES"
+  log "atender-slack (implementar/validar) rc=$RC: $OUT"
+else
+  rm -f "$JATE"
+  OUT=$(bash "$AQUI/lanzar-claude.sh" "${CANAL2_NOMBRE:-proyecto}" "$NOTA" "$SHA" "$DESDE" 2>&1); RC=$?
+  log "lanzar-claude rc=$RC: $(printf '%s' "$OUT" | tail -1)"
+fi
 if [ $RC -ne 0 ]; then
   bash "$AQUI/avisar-humano.sh" "Bloque nuevo en el segundo canal ($RESUMEN) y no he podido abrir Claude (código $RC). Míralo tú o abre Claude a mano." 2>>"$LOG" || true
 fi

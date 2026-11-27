@@ -18,6 +18,7 @@ if [ -f "$AQUI/cursor-apagado" ] && { [ "${CANAL_PRUEBAS:-0}" != 1 ] || [ "${CUR
   echo "$(date -Is) no pude pasar el encargo a Claude (hilo $HILO)"; rm -f "$J"; exit 12
 fi
 rm -f "$J"
+export AUTOR=Cursor   # sus respuestas salen firmadas como Cursor (responder-slack.sh); los avisos del sistema usan AUTOR=Sistema
 # (el bloqueo «sin saldo de API» ya no va aquí: solo se aplica en el respaldo por API, si falla el CLI con la sesión OCA)
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 responder() { printf '%s' "$1" > "$TMP/r.txt"; bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$TMP/r.txt" || true; }
@@ -30,7 +31,7 @@ if [ "$QUIEN" != "Humano" ] && ! FRENO_POR=$(bash "$AQUI/freno.sh" cursor "$HILO
   if [ ! -f "$MARCA" ] || [ $(( $(date +%s) - $(stat -c %Y "$MARCA") )) -ge 3600 ]; then
     touch "$MARCA"; AV=$(mktemp)
     printf '🚫 Freno anti ping-pong: no abro a Cursor en este hilo ahora (límite de la última hora). Si hace falta ya, que lo pida Humano a mano: a él no se le frena.' > "$AV"
-    bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
+    AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
   fi
   exit 12
 fi

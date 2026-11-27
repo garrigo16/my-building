@@ -2,6 +2,7 @@
 set -uo pipefail
 _cfg="$(dirname "${BASH_SOURCE[0]}")/config.sh"; [ -f "$_cfg" ] && . "$_cfg"   # identidad: config.local.json (ver config.js)
 J=${1:?json}
+export AUTOR=Claude   # lo que contesta este Claude sale firmado «*Claude:*» (responder-slack.sh); los avisos del sistema usan AUTOR=Sistema
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO=${CANAL_REPO:-"$HOME/Documents/Oca Global Repository/oca-salesforce"}
 mkdir -p "$HOME/.canal-logs"
@@ -58,7 +59,7 @@ if [ "$QUIEN" != "Humano" ] && ! bash "$AQUI/freno.sh" slack "$HILO" 2>/dev/null
   if [ ! -f "$MARCA" ] || [ $(( $(date +%s) - $(stat -c %Y "$MARCA") )) -ge 3600 ]; then
     touch "$MARCA"; AV=$(mktemp)
     printf '🚫 Freno anti ping-pong: no abro a Claude en este hilo ahora (límite de la última hora). Si hace falta ya, que lo pida Humano a mano: a él no se le frena.' > "$AV"
-    bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
+    AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
   fi
   rm -f "$TXTF"; exit 12
 fi
@@ -151,6 +152,9 @@ fi
 REGLA_IA_SIGUE=$REGLA_IA; [ "$MIRADA" = 1 ] && REGLA_IA=""
 FORMATO_J=$(tr -d '\r' < "$AQUI/formato-para-humano.txt" 2>/dev/null)
 REGLA_OK="OK DE HUMANO (manda sobre todo lo anterior): para pedirle un OK pregunta solo «¿Doy el OK a X?». Cualquier «ok / vale / adelante / dale / sí» suyo vale: NUNCA le pidas una frase concreta («contesta “ok perfil”»). Cuando un mensaje suyo es su OK, haz YA todo lo que propusiste (escribir en el org, abrir la PR, contestar por privado…) y contesta con el resultado; no vuelvas a preguntar lo mismo. Si aun así te falta un permiso, dilo en una línea, sin repetir la propuesta."
+# ids de los bloques del canal git que originaron este despertar (BLOQUES=id1,id2 en el entorno, los pone el vigía)
+BLOQUES_TXT=""
+[ -n "${BLOQUES:-}" ] && BLOQUES_TXT="Bloques del canal git que originaron este despertar: ${BLOQUES}. Léelos SIEMPRE (busca su id o su título en el fichero del canal), aunque sean antiguos y no salgan en el último tramo del git log."
 REGLA_UNA=""
 if [ "$QUIEN" = "Humano" ] && [ "$CON_COO" = 1 ] && [ "$ES_OK" = 0 ]; then
   REGLA_UNA="UNA SOLA RESPUESTA: Humano ha escrito a varias IAs a la vez y Coo va entre ellas. NO le contestes en Slack: haz tu parte y déjasela a Coo en el canal git (bloque con NOTA y «para: Coo»); escribe exactamente NADA en el fichero de respuesta. Coo le da a Humano UNA respuesta que junta la de todos."
@@ -182,6 +186,7 @@ fi
 [ -n "$REGLA_IA" ] && printf '%s\n' "${REGLA_IA# }"
 [ -n "$REGLA_UNA" ] && printf '%s\n' "$REGLA_UNA"
 [ -n "$RELACIONADOS" ] && printf '%s\n' "$RELACIONADOS"   # v512
+[ -n "$BLOQUES_TXT" ] && printf '%s\n' "$BLOQUES_TXT"
 [ "$PIDE_MULE" = 1 ] && printf 'MuleSoft en solo lectura: bash %s/mule.sh entornos | apps <entorno> | app <entorno> <app> | logs <entorno> <app> [n] [texto]. Para cambiar algo en MuleSoft, prepara los pasos y que lo haga Humano.\n' "$AQUI"
 [ "$OK_PR" = 1 ] && printf 'En este mensaje Humano da su OK para ABRIR la PR que pide (solo abrirla).\n'
 [ "$OK_PRIV" = 1 ] && printf 'En este mensaje Humano da su OK para CONTESTAR por privado lo que pide (solo eso).\n'
@@ -206,6 +211,7 @@ Cómo trabajar:
 1. CLAUDE.md y el índice de la memoria (MEMORY.md) ya te llegan cargados al arrancar: NO los releas con herramientas. Abre solo las memorias concretas que necesites para esta tarea. Aplica su estilo: acción primero, corto y en listas numeradas. Gasta poco: esto sale de la cuota de Humano.
 2. Lee el hilo entero antes de actuar (conversations.replies, canal $CH, ts $HILO, con SLACK_BOT_TOKEN de ~/.config/canal-slack.env; nunca muestres el token). Busca también encargos de Coo o Cursor que no hayas atendido.
 $( [ -n "$RELACIONADOS" ] && printf '2b. %s' "$RELACIONADOS" )
+$( [ -n "$BLOQUES_TXT" ] && printf '2c. %s' "$BLOQUES_TXT" )
 3. Si el mensaje no es para ti (charla, va para otra IA, o ya lo está resolviendo otra), escribe exactamente NADA en el fichero de respuesta y no envíes nada.
 4. Tienes Bash (Git Bash) y PowerShell. Los orgs se tocan con sf SOLO desde PowerShell (en Git Bash no funciona); alias: QA, UAT, PRODOCA (PROD). Las lecturas (sf data query, retrieve a una carpeta temporal, sf org list metadata) son libres. Las escrituras en un org (deploy, DML, apex anónimo, asignar permisos) están BLOQUEADAS en este turno: prepara el comando exacto, explica en una línea qué cambia y pide a Humano que conteste en el hilo empezando por «ok». Con ese ok, el siguiente turno se abre con las escrituras habilitadas y ejecutas exactamente lo propuesto, nada más. Nunca cambios en PROD en viernes.
 5. $REGLA_CANAL$REGLA_IA
@@ -222,6 +228,7 @@ $( [ -n "$REGLA_UNA" ] && printf '7f. %s' "$REGLA_UNA" )
 7e. $REGLA_OK$( [ "$ES_OK" = 1 ] && [ "$QUIEN" = "Humano" ] && printf ' ESTE MENSAJE ES SU OK: las escrituras en org, abrir la PR y contestar por privado están habilitadas en este turno. Haz ya lo que propusiste y él ha aprobado, nada más.' )
 8. CONTESTA SIEMPRE en Slack (salvo el punto 3, o si lo técnico ya lo has dejado en el canal y no hay nada para Humano: entonces NADA), con el formato del punto 7d: escribe tu respuesta en el fichero $RESPF y envíala con
    bash $AQUI/responder-slack.sh $CH $HILO $RESPF
+   (Tu mensaje sale firmado automáticamente como «Claude»: no escribas tú ninguna firma ni cabecera de autor.)
    Si la tarea es larga, manda primero UNA línea con lo que vas a hacer y al final el resultado (también escueto).
 9. ANTES DE TERMINAR, vuelve a leer el hilo: mientras trabajabas no se abre otro Claude para este hilo, así que si Humano, Coo o Cursor te han escrito algo nuevo, atiéndelo tú en tu respuesta.
 EOF
@@ -279,11 +286,15 @@ llama_claude() {   # relevo: si la cuenta de empresa topa con su cuota, UNA repe
   return $rc
 }
 llama_una() {   # (v491: la misma llamada para la mirada y para la segunda fase)
-  "$CLI" -p "${SES[@]}" --model "$MODELO" --effort "$ESFUERZO" --permission-mode acceptEdits --strict-mcp-config "${MCP_ARGS[@]}" \
+  # tope de tiempo (CLAUDE_TOPE_SEG, 1200 s por defecto): un claude -p colgado no se queda para siempre con el hilo y el hueco
+  timeout -k 10 "${CLAUDE_TOPE_SEG:-1200}" "$CLI" -p "${SES[@]}" --model "$MODELO" --effort "$ESFUERZO" --permission-mode acceptEdits --strict-mcp-config "${MCP_ARGS[@]}" \
     --tools "Bash,Read,Grep,Glob,Edit,Write,Agent,PowerShell" --disable-slash-commands \
     --allowedTools "Bash Read Grep Glob Edit Write Agent PowerShell$PERM_NAV" \
     --disallowedTools "Bash(sf *)" "${NO_ESCRIBIR[@]}" "${SIN_SLACK[@]}" "${BLOQ_MIRADA[@]}" \
     --max-budget-usd "$TOPE_USD" < "$PROMPTF" > "$LOGF" 2>&1
+  local rc=$?
+  [ "$rc" = 124 ] && echo "$(date -Is) hilo $HILO saltó el tope de tiempo (${CLAUDE_TOPE_SEG:-1200} s): claude -p cortado (rc=124); log $LOGF" >> "$HOME/.canal-logs/sesiones-slack.log"
+  return $rc
 }
 llama_claude
 RC=$?
@@ -323,7 +334,7 @@ if grep -qi 'Exceeded USD budget' "$LOGF" 2>/dev/null; then
   echo "$(date -Is) hilo $HILO TOPE alcanzado ($TOPE_USD \$)" >> "$HOME/.canal-logs/sesiones-slack.log"
   if [ "$QUIEN" = "Humano" ]; then
     AV=$(mktemp); printf '⏸️ Paré al llegar al tope de %s $ por recado (ahorro de cuota). Si hace falta seguir, contesta «sigue».' "$TOPE_USD" > "$AV"
-    bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
+    AUTOR=Sistema bash "$AQUI/responder-slack.sh" "$CH" "$HILO" "$AV" >/dev/null 2>&1 || true; rm -f "$AV"
     bash "$AQUI/responder-slack.sh" --reaccion "$CH" "$TS" double_vertical_bar >/dev/null 2>&1 || true
     exit 0
   fi

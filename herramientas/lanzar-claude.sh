@@ -38,6 +38,11 @@ bash "$AQUI/freno.sh" claude || { echo "$(date -Is) FRENO: no abro Claude para $
 mkdir -p "$HOME/.canal-logs"
 LOGF="$HOME/.canal-logs/claude-$(date +%Y%m%d-%H%M%S)-${SHA:0:10}.log"
 NOTA_TXT=$(tr -d '\r' < "$NOTA")
+# ids de los bloques que originaron el despertar (BLOQUES=id1,id2 en el entorno): se leen aunque queden fuera de DESDE..SHA
+BLOQUES_TXT=""
+if [ -n "${BLOQUES:-}" ]; then
+  BLOQUES_TXT="Bloques que originaron este despertar: ${BLOQUES}. Léelos SIEMPRE (busca su id o su título en $FICH), aunque sean más antiguos y queden fuera de git log ${DESDE:0:10}..${SHA:0:10}: ese tramo puede no incluirlos."
+fi
 PROMPTF=$(mktemp)
 cat > "$PROMPTF" <<EOF
 Eres Claude, uno de los coordinadores del canal "$CANAL" de OCA. Te ha abierto un recado del canal: no hay vigía, nadie te volverá a llamar para esto y nadie está mirando esta sesión.
@@ -50,7 +55,8 @@ Este recado iba para Cursor o Grok, que están apagados: hazlo tú y no se lo pa
 Qué hacer:
 1. CLAUDE.md y el índice de la memoria (MEMORY.md) ya te llegan cargados al arrancar: NO los releas con herramientas (gasta cuota del curro). Abre solo las memorias concretas que necesites.
 2. Canal: rama $RAMA, fichero $FICH, worktree $WT. Tu shell es la herramienta Bash (Git Bash). Haz UN fetch y lee solo el tramo nuevo: git log ${DESDE:0:10}..${SHA:0:10} y el diff de $FICH en ese tramo, más los anexos que esos bloques citen.
-3. Haz lo que te piden, solo en lectura de git y del repo. Responde en el canal SIEMPRE con:
+${BLOQUES_TXT:+   $BLOQUES_TXT
+}3. Haz lo que te piden, solo en lectura de git y del repo. Responde en el canal SIEMPRE con:
    LEIDO=<sha leído> NOTA=<fichero de nota> bash $AQUI/publicar-canal.sh $CANAL <bloque.md> "[skip ci] Canal: ..."
    Formato de la nota y del bloque: mira la cabecera de $AQUI/nota-slack.sh y los últimos bloques del canal.
    - Cabecera del bloque con su estado al final (punto 7 de $AQUI/formato-para-humano.txt): «| estado: lo hace: Cursor — <qué>», «| estado: te toca: <pregunta a Humano>» o «| estado: hecho». Título con la etiqueta del tema entre corchetes, la misma que el bloque al que contestas.
@@ -66,6 +72,7 @@ EOF
 
 cd "$REPO"
 export CANAL_SOY_CLAUDE_HEADLESS=1
+export TOPE_ETIQ="canal $CANAL ${SHA:0:10}"   # (para el aviso del tope de tiempo, dentro del bash -c)
 # Desacoplado: el que lo lanza no espera. El prompt entra por stdin (las tildes no sobreviven al argv de Windows).
 # Relevo de cuenta (relevo-claude.js): empresa (Team) por defecto; si agota la ventana de 5 h o el cupo semanal, UN relevo a la
 # personal (Pro) con CLAUDE_CONFIG_DIR=~/.claude-personal y sin el token de empresa; si paran las dos, aviso y no se lanza.
@@ -80,11 +87,14 @@ nohup bash -c '
   [ "$CTA" = parar ] && { rm -f "$1"; exit 0; }
   pasa_a_personal() { export CLAUDE_CONFIG_DIR="${USERPROFILE:-$HOME}/.claude-personal"; unset CLAUDE_CODE_OAUTH_TOKEN; }
   lanza() {
-    "$CLI" -p --model claude-sonnet-5-5 --effort medium --permission-mode acceptEdits --strict-mcp-config \
+    timeout -k 10 "${CLAUDE_TOPE_SEG:-1200}" "$CLI" -p --model claude-sonnet-5-5 --effort medium --permission-mode acceptEdits --strict-mcp-config \
          --tools "Bash,Read,Grep,Glob,Edit,Write,Agent" --disable-slash-commands \
          --allowedTools "Bash Read Grep Glob Edit Write Agent" \
          --disallowedTools "PowerShell" "Bash(powershell*)" "Bash(pwsh*)" "Bash(sf *)" "Bash(*powershell.exe*)" \
          --max-budget-usd 3 < "$1" > "$2" 2>&1
+    local rc=$?
+    [ "$rc" = 124 ] && echo "$(date -Is) $TOPE_ETIQ: saltó el tope de tiempo (${CLAUDE_TOPE_SEG:-1200} s), claude -p cortado (rc=124); log $2" >> "$HOME/.canal-logs/sesiones-slack.log"
+    return $rc
   }
   CLI=$0
   [ "$CTA" = personal ] && pasa_a_personal
