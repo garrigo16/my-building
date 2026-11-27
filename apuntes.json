@@ -1,7 +1,7 @@
 {
  "notas": {},
  "recordatorios": [],
- "ver": 7,
+ "ver": 8,
  "ajustes": {
   "cumple": "",
   "aniversario": "",
@@ -16,7 +16,8 @@
    }
   },
   "cerrados": {
-   "Revisar continuación SFEI-1294": 1795623185782
+   "Revisar continuación SFEI-1294": 1795623185782,
+   "SFEI-1275 · [CORE] Nuevos Permisos Perfiles DT - InspectionDates__c": 1795766923447
   },
   "quitados": {},
   "hilosHechos": {},
