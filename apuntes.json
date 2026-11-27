@@ -1,7 +1,7 @@
 {
  "notas": {},
  "recordatorios": [],
- "ver": 8,
+ "ver": 9,
  "ajustes": {
   "cumple": "",
   "aniversario": "",
@@ -13,6 +13,11 @@
     "t": 1795689064749,
     "motivo": "Falta info ticket y funcional",
     "hasta": 1802242800000
+   },
+   "SFEI-1294 · [CORE] Corregir el reintento de albaranado automático ZOBR tras la…": {
+    "t": 1795776749727,
+    "motivo": "Pendiente de prod: no está en Nuevo; esperar a que pase a PROD",
+    "hasta": null
    }
   },
   "cerrados": {
